@@ -6,15 +6,16 @@ function Invoke-SnapshotRun {
         [ValidateRange(1,1000)][int]$MaxNicEvents = 200,
         [ValidateRange(1,1000)][int]$MaxPowerEvents = 100,
         [ValidateRange(1,600)][int]$CheckTimeoutSeconds = 30,
-        [switch]$IncludeConnectivityTests, [switch]$IncludeGatewayPing,
+        [switch]$IncludeConnectivityTests, [switch]$IncludeGatewayPing, [switch]$IncludeLegacyDnsTargets,
         [ValidateCount(1,16)][string[]]$TcpDestinations = @('1.1.1.1','2606:4700:4700::1111'),
         [ValidateRange(1,65535)][int]$TcpPort = 443,
         [string]$DnsQueryName = 'example.com', [string]$HttpsEndpoint = 'https://example.com/',
         [ValidateRange(1,60)][int]$ProbeTimeoutSeconds = 10,
         [ValidateRange(5,120)][int]$ProbeWorkerOverheadSeconds = 15,
         # Injection seams are for dependency-free orchestration tests, never CLI options.
-        [scriptblock]$CheckExecutor, [scriptblock]$CheckpointObserver)
+        [scriptblock]$CheckExecutor, [scriptblock]$CheckpointObserver, [string]$TestOutputRoot)
     if ($IncludeGatewayPing -and -not $IncludeConnectivityTests) { throw 'IncludeGatewayPing requires IncludeConnectivityTests.' }
+    if ($IncludeLegacyDnsTargets -and -not $IncludeConnectivityTests) { throw 'IncludeLegacyDnsTargets requires IncludeConnectivityTests.' }
     $uri = $null
     if (-not [uri]::TryCreate($HttpsEndpoint, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https' -or
         $uri.UserInfo -or $uri.Query -or $uri.Fragment) { throw 'HttpsEndpoint must be HTTPS without user information, query, or fragment.' }
@@ -23,16 +24,17 @@ function Invoke-SnapshotRun {
     }
     $identity = New-SnapshotIdentity
     $computer = $identity.ComputerName -replace '[^A-Za-z0-9_.-]', '_'
-    $directory = Join-Path (Join-Path $RepositoryRoot 'output') ("snapshot-$computer-$($identity.RunId)")
+    $outputRoot = $(if ($TestOutputRoot) { $TestOutputRoot } else { Join-Path $RepositoryRoot 'output' })
+    $directory = Join-Path $outputRoot ("snapshot-$computer-$($identity.RunId)")
     $null = New-Item -Path $directory -ItemType Directory -ErrorAction Stop
-    $evidence = [pscustomobject]@{ SchemaVersion = 3; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    $evidence = [pscustomobject]@{ SchemaVersion = 4; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()
         PowerShellVersion = $PSVersionTable.PSVersion.ToString()
         Parameters = [pscustomobject]@{ LookbackHours = $LookbackHours; MaxEventsPerLog = $MaxEventsPerLog
             MaxNicEvents = $MaxNicEvents; MaxPowerEvents = $MaxPowerEvents; CheckTimeoutSeconds = $CheckTimeoutSeconds
-            IncludeConnectivityTests = [bool]$IncludeConnectivityTests; IncludeGatewayPing = [bool]$IncludeGatewayPing
+            IncludeLegacyDnsTargets = [bool]$IncludeLegacyDnsTargets; IncludeConnectivityTests = [bool]$IncludeConnectivityTests; IncludeGatewayPing = [bool]$IncludeGatewayPing
             TcpDestinations = $TcpDestinations; TcpPort = $TcpPort; DnsQueryName = $DnsQueryName
             HttpsEndpoint = $HttpsEndpoint; ProbeTimeoutSeconds = $ProbeTimeoutSeconds; ProbeWorkerOverheadSeconds = $ProbeWorkerOverheadSeconds }
         Checks = @(); Findings = Get-DiagnosticFindings @(); CollectionError = $null }
@@ -53,7 +55,12 @@ function Invoke-SnapshotRun {
         if ($definition.FunctionName -eq 'Invoke-ConnectivityProbe') {
             $timeout = $ProbeTimeoutSeconds + $ProbeWorkerOverheadSeconds
         } elseif ($definition.TimeoutSeconds) { $timeout = [Math]::Min($timeout, [int]$definition.TimeoutSeconds) }
-        if ($null -ne $CheckExecutor) { $result = & $CheckExecutor $definition $timeout $directory }
+        if ($definition.SkipReason) {
+            $result = [pscustomobject]@{ Name = $definition.Name; Status = 'Skipped'; Request = $definition.Arguments; Error = $null
+                Data = @([pscustomobject]@{ Kind = 'DNS'; Destination = $definition.Arguments.Destination; DnsTarget = $definition.Arguments.DnsTarget
+                    Outcome = 'Skipped'; SkipReason = $definition.SkipReason; DurationMs = $null; DnsError = $null
+                    Evidence = [pscustomobject]@{ QueryName = $definition.Arguments.QueryName; QueryType = $definition.Arguments.QueryType } }) }
+        } elseif ($null -ne $CheckExecutor) { $result = & $CheckExecutor $definition $timeout $directory }
         else { $result = Invoke-BoundedCheck -Definition $definition -SourceDirectory $source -WorkingDirectory $directory -TimeoutSeconds $timeout }
         $evidence.Checks += $result
         $evidence.PendingCheck = $null
@@ -72,7 +79,7 @@ function Invoke-SnapshotRun {
             & $execute $definition
         }
         if ($IncludeConnectivityTests) {
-            $definitions = @(Get-ConnectivityDefinitions -Checks $evidence.Checks -TcpDestinations $TcpDestinations -TcpPort $TcpPort -DnsQueryName $DnsQueryName -HttpsEndpoint $HttpsEndpoint -ProbeTimeoutSeconds $ProbeTimeoutSeconds -IncludeGatewayPing ([bool]$IncludeGatewayPing))
+            $definitions = @(Get-ConnectivityDefinitions -Checks $evidence.Checks -TcpDestinations $TcpDestinations -TcpPort $TcpPort -DnsQueryName $DnsQueryName -HttpsEndpoint $HttpsEndpoint -ProbeTimeoutSeconds $ProbeTimeoutSeconds -IncludeGatewayPing ([bool]$IncludeGatewayPing) -IncludeLegacyDnsTargets ([bool]$IncludeLegacyDnsTargets))
             foreach ($definition in $definitions) {
                 & $execute $definition
                 if ($definition.Arguments.Kind -eq 'Resolve') {

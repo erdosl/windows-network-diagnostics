@@ -8,6 +8,7 @@ param(
     [ValidateRange(1,600)][int]$CheckTimeoutSeconds = 30,
     [switch]$IncludeConnectivityTests,
     [switch]$IncludeGatewayPing,
+    [switch]$IncludeLegacyDnsTargets,
     [ValidateCount(1,16)][string[]]$TcpDestinations = @('1.1.1.1','2606:4700:4700::1111'),
     [ValidateRange(1,65535)][int]$TcpPort = 443,
     [string]$DnsQueryName = 'example.com',
@@ -22,6 +23,9 @@ foreach ($file in @('Core.ps1','State.ps1','Execution.ps1','Events.ps1','Collect
 if ($env:OS -ne 'Windows_NT') { throw 'This collector requires Windows 10/11.' }
 $paths = Invoke-SnapshotRun -RepositoryRoot $PSScriptRoot @PSBoundParameters
 Get-CheckSummary -Checks $paths.Evidence.Checks | Format-Table Name,CollectionStatus,ProbeOutcome,TimeoutScope -AutoSize -Wrap | Out-Host
+$consoleWidth = 80
+try { if ($Host.UI.RawUI.WindowSize.Width -ge 20) { $consoleWidth = $Host.UI.RawUI.WindowSize.Width } } catch { }
+Format-DnsConsoleReport $paths.Evidence.Checks -Width ([Math]::Min(1000, $consoleWidth)) | ForEach-Object { Write-Host $_ }
 Write-Host "JSON evidence: $($paths.JsonPath)"
 Write-Host "HTML summary:  $($paths.HtmlPath)"
 $paths | Select-Object JsonPath,HtmlPath

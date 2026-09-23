@@ -43,3 +43,11 @@
   network outcome unknown; ordinary probe failures/timeouts can be collected successfully.
 - Use one elapsed-time budget across TCP/TLS/HTTP, plus a separate bounded worker
   overhead allowance. Preserve completed stage evidence on cooperative timeouts.
+
+- Retain full DNS inventory and configured associations. Skip only the three exact
+  legacy DNS discovery addresses by default; explicit legacy opt-in also requires
+  connectivity opt-in. Never infer the query interface from configured associations.
+- Classify DNS errors from reliable numeric exception codes, not localized text;
+  retain original errors and separate DNS/probe timeouts from worker termination.
+- Put new synthetic orchestration snapshots and recovery fixtures under output/tests/.
+  Do not alter or delete existing user diagnostic reports.

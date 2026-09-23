@@ -1,3 +1,5 @@
+. (Join-Path $PSScriptRoot 'Dns.ps1')
+
 function Get-ProbeRemainingMilliseconds {
     param([Diagnostics.Stopwatch]$Watch, [int]$TimeoutMs, [string]$Stage)
     $remaining = $TimeoutMs - $Watch.ElapsedMilliseconds
@@ -68,7 +70,7 @@ function Get-RoutePrediction {
 function Invoke-ConnectivityProbe {
     param([ValidateSet('Resolve','Route','Gateway','DNS','TCP','HTTPS')][string]$Kind,
         [string]$Destination, [int]$Port = 443, [string]$QueryName = 'example.com', [string]$QueryType = 'A',
-        [string]$Endpoint = 'https://example.com/', [int]$InterfaceIndex = 0,
+        [string]$Endpoint = 'https://example.com/', [int]$InterfaceIndex = 0, $DnsTarget = $null,
         [bool]$IncludeGatewayPing = $false, [ValidateRange(100,60000)][int]$TimeoutMs = 3000)
     $start = [DateTimeOffset]::Now
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -77,7 +79,7 @@ function Invoke-ConnectivityProbe {
     if ([Net.IPAddress]::TryParse($Destination, [ref]$parsed)) { $family = $parsed.AddressFamily.ToString() }
     $result = [ordered]@{ Kind = $Kind; Destination = $Destination; Port = $Port; AddressFamily = $family
         StartedAt = $start.ToString('o'); CompletedAt = $null; DurationMs = 0; Outcome = 'Failed'; Error = $null
-        ProbeTimeoutMs = $TimeoutMs; TimeoutScope = $null; CompletedStages = @()
+        DnsTarget = $DnsTarget; DnsError = $null; ProbeTimeoutMs = $TimeoutMs; TimeoutScope = $null; CompletedStages = @()
         RoutePrediction = $null; RouteError = $null; ObservedConnection = $null; Evidence = $null }
     $client = $null
     $ssl = $null
@@ -127,8 +129,9 @@ function Invoke-ConnectivityProbe {
             'DNS' {
                 $result.Evidence = [pscustomobject]@{ Server = $Destination; QueryName = $QueryName; QueryType = $QueryType
                     Attribution = 'Server-specific query; route prediction only, source interface not observed'; Answers = @() }
-                $result.Evidence.Answers = @(Resolve-DnsName -Name $QueryName -Type $QueryType -Server $Destination -DnsOnly -NoHostsFile -QuickTimeout -ErrorAction Stop |
-                    Select-Object Name,Type,TTL,Section,IPAddress,NameHost,Strings)
+                try { $result.Evidence.Answers = @(Resolve-DnsName -Name $QueryName -Type $QueryType -Server $Destination -DnsOnly -NoHostsFile -QuickTimeout -ErrorAction Stop |
+                    Select-Object Name,Type,TTL,Section,IPAddress,NameHost,Strings) }
+                catch { $result.DnsError = Get-DnsErrorDetail $_; throw }
                 $result.Outcome = 'Success'
             }
             { $_ -in @('TCP','HTTPS') } {
@@ -178,7 +181,8 @@ function Invoke-ConnectivityProbe {
         $null = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'probe completion'
     } catch {
         $result.Outcome = $(if ((Test-ProbeTimeoutException $_.Exception) -or $watch.ElapsedMilliseconds -ge $TimeoutMs) { 'TimedOut' } else { 'Failed' })
-        if ($result.Outcome -eq 'TimedOut') { $result.TimeoutScope = 'Probe' }
+        if ($result.DnsError -and $result.DnsError.Classification -eq 'Timeout') { $result.Outcome = 'TimedOut'; $result.TimeoutScope = 'DNS' }
+        elseif ($result.Outcome -eq 'TimedOut') { $result.TimeoutScope = 'Probe' }
         $result.Error = [pscustomobject]@{ Message = $_.Exception.Message; Id = $_.FullyQualifiedErrorId; Category = [string]$_.CategoryInfo.Category }
     } finally {
         if ($null -ne $ssl) { $ssl.Dispose() }
@@ -199,7 +203,7 @@ function New-ProbeDefinition {
 
 function Get-ConnectivityDefinitions {
     param([object[]]$Checks, [string[]]$TcpDestinations, [int]$TcpPort, [string]$DnsQueryName,
-        [string]$HttpsEndpoint, [int]$ProbeTimeoutSeconds, [bool]$IncludeGatewayPing)
+        [string]$HttpsEndpoint, [int]$ProbeTimeoutSeconds, [bool]$IncludeGatewayPing, [bool]$IncludeLegacyDnsTargets = $false)
     $commonMs = [Math]::Min(60000, $ProbeTimeoutSeconds * 1000)
     $routes = @($Checks | Where-Object { $_.Name -eq 'Routes' -and $_.Status -eq 'Success' } | ForEach-Object { $_.Data })
     foreach ($route in @($routes | Where-Object { $_.DestinationPrefix -in @('0.0.0.0/0','::/0') -and $_.NextHop -notin @('0.0.0.0','::') } |
@@ -210,17 +214,11 @@ function Get-ConnectivityDefinitions {
             Kind = 'Gateway'; Destination = $destination; InterfaceIndex = [int]$route.InterfaceIndex; IncludeGatewayPing = $IncludeGatewayPing; TimeoutMs = $commonMs
         } $ProbeTimeoutSeconds
     }
-    $dns = @($Checks | Where-Object { $_.Name -eq 'DNSServers' -and $_.Status -eq 'Success' } | ForEach-Object { $_.Data })
-    foreach ($server in @($dns | ForEach-Object {
-        $entry = $_
-        foreach ($address in $entry.ServerAddresses) {
-            $value = [string]$address
-            if ($value -like 'fe80:*' -and $value -notlike '*%*') { $value += '%' + $entry.InterfaceIndex }
-            $value
-        }
-    } | Select-Object -Unique)) {
+    foreach ($target in @(Get-DnsTargetInventory $Checks $IncludeLegacyDnsTargets)) {
         foreach ($type in @('A','AAAA')) {
-            New-ProbeDefinition "Connectivity:DNS:${server}:$type" @{ Kind = 'DNS'; Destination = $server; QueryName = $DnsQueryName; QueryType = $type; TimeoutMs = $commonMs } $ProbeTimeoutSeconds
+            $definition = New-ProbeDefinition "Connectivity:DNS:$($target.TargetId):$type" @{ Kind = 'DNS'; Destination = $target.Server; DnsTarget = $target; QueryName = $DnsQueryName; QueryType = $type; TimeoutMs = $commonMs } $ProbeTimeoutSeconds
+            $definition | Add-Member NoteProperty SkipReason $(if ($target.Selection -eq 'Skipped') { $target.Reason } else { $null })
+            $definition
         }
     }
     foreach ($destination in @($TcpDestinations | Select-Object -Unique)) {

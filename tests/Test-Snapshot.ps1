@@ -65,7 +65,7 @@ $evidence = [pscustomobject]@{
     SchemaVersion = 1; CollectedAt = $payload; Checks = $reportChecks
     Findings = [pscustomobject]@{ Observations = @($payload); Hypotheses = @($payload) }
 }
-$testDir = Join-Path $root ('output\tests-' + [guid]::NewGuid().ToString('N'))
+$testDir = Join-Path $root ('output\tests\snapshot-' + [guid]::NewGuid().ToString('N'))
 $paths = Write-DiagnosticReport $evidence $testDir
 $roundtrip = Get-Content -LiteralPath $paths.JsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $html = Get-Content -LiteralPath $paths.HtmlPath -Raw -Encoding UTF8

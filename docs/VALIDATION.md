@@ -1,3 +1,131 @@
+# User validation and console presentation update
+
+The user reports **165 passing assertions across five suites** and an active
+collector exit code of **0**. Reported outcomes: **six legacy DNS queries skipped,
+six DNS queries succeeded, TCP succeeded, and both HTTPS probes succeeded**.
+These are user-reported results for the DNS-selection update, not agent reruns.
+No machine names, interface aliases, server addresses, run IDs or diagnostic paths
+from that run are included here. The user did not separately report test-process
+privileges or environment details for this validation; none are inferred.
+
+Focused presentation validation uses normal Windows PowerShell 5.1 file execution
+in the previously documented non-elevated Windows 10 sandbox:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-Presentation.ps1
+powershell.exe -NoProfile -File .\tests\Test-Dns.ps1
+```
+
+Presentation suite: **33 assertions passed, exit 0**. DNS suite: **39 assertions
+passed, exit 0**. Presentation tests cover widths 20, 40, 60, 80 and 120, complete
+wrapped result values/reasons, associations once per target, readable numeric
+enums, explicit unknown/missing values, unchanged raw JSON and failure reasons.
+These tests are synthetic and do not send external probes. Historical sandbox
+failures below remain recorded, distinct from the user's successful validation.
+
+---
+
+# DNS selection/error validation (0.2.2, schema 4)
+
+2026-09-23, agent sandbox: Windows 10 Pro 22H2 build 19045.7725,
+Windows PowerShell 5.1.19041.7725, non-elevated. Effective/CurrentUser execution
+policy RemoteSigned; all other scopes Undefined. No policy change, restriction
+bypass, external active probe, dependency installation or network-setting change.
+No commits or pushes; existing privacy-corrected history preserved.
+
+## Normal file execution results
+
+All suites were invoked from the repository directory with the exact commands:
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1` | 0 | 42 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1` | 1 | Checkpoint File.Replace access denied; full suite unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-Probes.ps1` | 1 | TLS initialization security-package restriction; full suite unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1` | 0 | 23 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Dns.ps1` | 0 | 39 assertions passed |
+| `powershell.exe -NoProfile -File .\output\Validate-ReviewSyntax.ps1` | 0 | 18 PowerShell files parsed with the 5.1 parser |
+| `powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -IncludeLegacyDnsTargets` | 1, expected | Rejected with `IncludeLegacyDnsTargets requires IncludeConnectivityTests.` before collection |
+
+The syntax harness is ignored local output, not a replacement for actual script
+execution. The test scripts normally dot-source the source files; workers in the
+review suite run as actual Windows PowerShell processes. Existing sandbox errors
+remain unchanged:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12 char:49
+FullyQualifiedErrorId: UnauthorizedAccessException
+
+Assertion failed: HTTPS TLS timeout retained (actual outcome: Failed; error:
+Exception calling "BeginAuthenticateAsClient" with "3" argument(s):
+"No credentials are available in the security package")
+At tests/Test-Probes.ps1:8 char:28
+```
+
+## New coverage and isolation
+
+DNS tests cover all three exact legacy addresses; compressed, expanded and scoped
+forms; parsed equality and scope-aware deduplication; retention of original
+spellings, zones and multiple configured associations; unrelated fec0 targets;
+VPN/virtual/disconnected/no-default-route eligibility; family-specific interface
+state; uncertain unzoned IPv6 targets; default skipping; explicit opt-in; and
+rejecting legacy opt-in without active-probe permission.
+
+Structured synthetic exceptions cover native timeout, NXDOMAIN, refused,
+server-failure and unknown codes, localized messages, inner exceptions and
+Win32-facility HRESULT decoding. Empty answer sets and message/ID text do not
+invent NXDOMAIN. Tests distinguish DNS timeout from worker timeout, verify skipped
+result counts/HTML escaping, and ensure no DNS root-cause hypothesis is generated.
+The DNS orchestration executor and report checkpoint writer are mocked; this
+verifies scheduling and skip behavior, not successful real atomic checkpoints.
+The final synthetic HTML uses the real report writer in a new directory.
+
+All new synthetic reports, orchestration snapshots and intentionally corrupt
+recovery fixtures are under ignored `output/tests/`. Existing user reports and
+older test artifacts were neither altered nor deleted. Raw live DNS inventory
+was not needed or copied into tests or documentation.
+
+## Manual commands and limitations
+
+From the repository directory in your normal Windows PowerShell terminal:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Probes.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Dns.ps1
+$LASTEXITCODE
+```
+
+For an optional active validation with default legacy skipping:
+
+```powershell
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -IncludeConnectivityTests -TcpDestinations 1.1.1.1 -DnsQueryName example.com -HttpsEndpoint https://example.com/
+$LASTEXITCODE
+```
+
+Only if you intend to query legacy addresses as well, add
+`-IncludeLegacyDnsTargets` to that active command. Neither command was run by the
+agent. Review the DNS table's collection status, probe outcome, classification,
+reason and configured associations separately; configuration is not an observed
+source path. Keep raw diagnostic files private.
+
+No live DNS-error-code validation or Windows 11 validation for this update.
+Historical user-run success below applies to 0.2.1, not a new 0.2.2 end-to-end run.
+Full persistence/TLS suites still need normal-terminal execution. Synchronous
+Windows providers can outlast the cooperative probe budget and remain bounded by
+the hard worker deadline. Missing or conflicting numeric codes remain Unknown.
+Numeric scope IDs are preserved, not verified as actual routing zones; ambiguous
+scope associations cannot prove the query path.
+
+---
+
 # Probe review validation (0.2.1, schema 3)
 
 Date: 2026-09-23. Windows 10 Pro 22H2, build 19045.7725;

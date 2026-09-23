@@ -1,6 +1,6 @@
 # Windows network diagnostics
 
-Milestone 2 review update (`0.2.1`) collects bounded Windows 10/11 network snapshots for
+Milestone 2 review update (`0.2.2`) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -45,7 +45,7 @@ PowerShell (its native `-File` command-line parser does not reliably pass arrays
 ```
 
 Default targets, used only after opt-in, are TCP port 443 on `1.1.1.1` and
-`2606:4700:4700::1111`, A/AAAA queries for `example.com` against each distinct
+`2606:4700:4700::1111`, A/AAAA queries for `example.com` against each selected
 configured DNS server, and `https://example.com/`. Hostnames are resolved and TCP/
 HTTPS results are collected separately for each returned IPv4/IPv6 address.
 Names may be disclosed to DNS infrastructure and destination services. Do not
@@ -59,6 +59,60 @@ alter machine TLS settings. HTTP error status lines are retained as `HttpError`;
 HEAD rejection is not proof of a network failure. Only the first HTTP response
 status line is collected (bounded to 4096 characters).
 
+## DNS target selection and interpretation
+
+All configured DNS addresses remain unchanged in raw inventory and interface
+summaries. Only the exact parsed IPv6 values `fec0:0:0:ffff::1`, `::2` and `::3`
+(with the same `fec0:0:0:ffff` prefix) are classified as legacy DNS discovery
+addresses. Equivalent expanded/compressed spellings and scope suffixes are
+recognized; other fec0 addresses are not treated as legacy targets.
+
+During opt-in connectivity collection, legacy A/AAAA targets get explicit
+`Skipped` check/result records with reason: "Legacy DNS discovery address;
+operational use unconfirmed." To probe them, add **both**
+`-IncludeConnectivityTests -IncludeLegacyDnsTargets`. The legacy switch alone
+is rejected before collection. Their presence or failure does not establish a
+DNS fault. Virtual/VPN/disconnected adapters and lack of a default route do not
+exclude other configured DNS servers.
+
+Equivalent targets retain all original spellings, scope suffixes, configured
+interface indices/aliases, adapter status/kind and family-specific IP-interface
+connection state. Explicit IPv6 zones remain separate. Unzoned link/site-local
+nonlegacy targets are kept separate by configured interface and marked uncertain;
+no interface zone is silently substituted. Unzoned legacy values aggregate all
+associations, retaining scope uncertainty. An explicit zone that differs from a
+configured interface is preserved and flagged. These are configured associations,
+not proof of the query's path; route predictions remain separate from observations.
+
+Schema 4 adds `Parameters.IncludeLegacyDnsTargets`, `Request.DnsTarget` and
+`Data[].DnsTarget`, and structured `Data[].DnsError`. Targets contain `TargetId`,
+`Server`/`NormalizedAddress`, `OriginalAddresses`, `ScopeId`, `AddressFamily`,
+`Classification`, `Selection`, `Reason`, `ScopeUncertainty`,
+`ConfiguredAssociations` and `Attribution`. Each association also retains its
+original address/scope. Skips have no duration or network result. If a worker is
+killed, the request still preserves target associations and query details.
+
+Console results use a compact Server/Type/Outcome/Skip-or-error-reason table.
+Long values wrap without ellipses; terminals narrower than 60 columns use labeled
+records so essential results are not dropped. Configured interface associations
+are shown separately once per target. Address families display IPv4/IPv6 and IP
+connection states display Disconnected/Connected; unknown values are explicit.
+These are presentation labels only: raw numeric values remain unchanged in JSON.
+The mappings follow [MSFT_NetIPInterface](https://github.com/MicrosoftDocs/win32/blob/docs/desktop-src/FWP/wmi/nettcpipprov/msft-netipinterface.md).
+HTML includes the detailed DNS table; both outputs include separate outcome counts.
+DNS errors preserve message, FullyQualifiedErrorId, category, exception type and
+numeric-code sources. Native Win32 codes and Win32-facility HRESULTs map 1460 and
+10060 to Timeout, 9003 to NameError/NXDOMAIN, 9002 to ServerFailure, and 9005 to
+Refused. Unrecognized/missing/conflicting codes remain Unknown. Message language,
+error-ID text and empty answers do not determine classification. A recognized
+DNS timeout has ProbeOutcome TimedOut and TimeoutScope DNS; a cooperative elapsed
+budget has scope Probe; a killed worker has scope Worker and unknown probe outcome.
+None alone proves unreachability or a DNS root cause.
+
+Code references: [Microsoft DNS error codes](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--9000-11999-),
+[Win32 timeout](https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--1300-1699-),
+[Winsock error codes](https://learn.microsoft.com/en-us/windows/win32/winsock/windows-sockets-error-codes-2).
+
 ## Parameters
 
 | Parameter | Default | Bounds / meaning |
@@ -70,6 +124,7 @@ status line is collected (bounded to 4096 characters).
 | `CheckTimeoutSeconds` | 30 | 1-600; deadline per isolated check, including worker startup |
 | `IncludeConnectivityTests` | off | Explicit permission for active probes |
 | `IncludeGatewayPing` | off | Requires connectivity switch; optional ICMP |
+| `IncludeLegacyDnsTargets` | off | Requires connectivity switch; probe exact legacy discovery targets instead of recording Skipped |
 | `TcpDestinations` | two literals above | 1-16 hostnames or IP literals |
 | `TcpPort` | 443 | 1-65535 |
 | `DnsQueryName` | example.com | A and AAAA queried independently |
@@ -115,7 +170,7 @@ by index, retains all addresses and default routes, shows family-specific metric
 and reports unavailable sources. It does not choose an "active gateway" from
 configuration. Raw check evidence remains below the summaries and in JSON.
 
-Schema **3** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
+Schema **4** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
 `StartedAt`/`CompletedAt` with offsets, `CollectionStatus`, `Revision`, `PendingCheck`,
 `PlannedChecks`, `Parameters`, and `CollectionError`. `CollectedAt` remains an alias
 for start time. Parameters formerly at the root now live under `Parameters`.
@@ -141,7 +196,7 @@ successfully; it does not mean connectivity worked. `HttpError` preserves HTTP
 error responses separately from TCP/TLS failures. Gateway `Observed` means only
 neighbour evidence was inspected, without ICMP.
 
-Schema 3 adds `Parameters.ProbeWorkerOverheadSeconds`, per-check `TimeoutScope`
+Schema 3 added `Parameters.ProbeWorkerOverheadSeconds`, per-check `TimeoutScope`
 (`Worker` for forced termination), and per-probe `ProbeTimeoutMs`, `TimeoutScope`
 (`Probe` for ordinary budget/network timeouts) and `CompletedStages`. Existing raw
 `Status`, `Outcome`, errors, endpoints and evidence remain available. A normal
@@ -197,11 +252,14 @@ powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1
 powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
 powershell.exe -NoProfile -File .\tests\Test-Probes.ps1
 powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1
+powershell.exe -NoProfile -File .\tests\Test-Dns.ps1
+powershell.exe -NoProfile -File .\tests\Test-Presentation.ps1
 ```
 
 They are dependency-free. Tests use synthetic data/mocked collectors, real local
 worker timeouts/child cleanup, and loopback-only socket failures. They never
-probe an external network. Artifacts remain under ignored `output/` directories.
+probe an external network. New synthetic artifacts, orchestration snapshots and corrupt recovery fixtures remain
+under ignored `output/tests/` directories. Existing user reports are not moved or deleted.
 See [validation results](docs/VALIDATION.md) for the actual environment, commands,
 results, file-execution validation, and remaining unverified coverage.
 

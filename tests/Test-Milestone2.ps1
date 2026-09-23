@@ -10,7 +10,7 @@ function Assert-Condition {
     if (-not $Condition) { throw "Assertion failed: $Message" }
     $script:count++
 }
-$workspace = Join-Path $root ('output\milestone2-tests-' + [guid]::NewGuid().ToString('N'))
+$workspace = Join-Path $root ('output\tests\milestone2-' + [guid]::NewGuid().ToString('N'))
 $null = New-Item -ItemType Directory -Path $workspace
 
 # A real process timeout, a native child, and a subsequent successful worker.
@@ -69,13 +69,13 @@ $observer = { param($evidence, $directory)
     $saved = Read-DiagnosticEvidence (Join-Path $directory 'evidence.json')
     $script:checkpoints += [pscustomobject]@{ Status = $saved.CollectionStatus; Count = $saved.Checks.Count; End = $saved.CompletedAt }
 }
-$run = Invoke-SnapshotRun -RepositoryRoot $root -CheckExecutor $mock -CheckpointObserver $observer
-Assert-Condition ($run.Evidence.SchemaVersion -eq 3 -and $run.Evidence.CollectionStatus -eq 'Complete') 'Versioned completed snapshot'
+$run = Invoke-SnapshotRun -TestOutputRoot (Join-Path $root 'output\tests\orchestration') -RepositoryRoot $root -CheckExecutor $mock -CheckpointObserver $observer
+Assert-Condition ($run.Evidence.SchemaVersion -eq 4 -and $run.Evidence.CollectionStatus -eq 'Complete') 'Versioned completed snapshot'
 Assert-Condition ($run.Evidence.ComputerName -eq [Environment]::MachineName) 'Computer identity'
 $id = [guid]::Empty
 Assert-Condition ([guid]::TryParse($run.Evidence.RunId, [ref]$id)) 'Unique RunId is a GUID'
 Assert-Condition ($run.JsonPath.Contains($run.Evidence.RunId) -and $run.JsonPath.Contains($run.Evidence.ComputerName)) 'Output path includes run and computer'
-Assert-Condition ($run.Evidence.CollectorVersion -eq '0.2.1' -and $run.Evidence.IsElevated -is [bool]) 'Version and process elevation'
+Assert-Condition ($run.Evidence.CollectorVersion -eq '0.2.2' -and $run.Evidence.IsElevated -is [bool]) 'Version and process elevation'
 Assert-Condition ($run.Evidence.StartedAt -match '[+-]\d\d:\d\d$' -and $run.Evidence.CompletedAt -match '[+-]\d\d:\d\d$') 'Collection timestamps retain UTC offsets'
 Assert-Condition ($script:checkpoints[0].Status -eq 'Incomplete' -and $script:checkpoints[0].Count -eq 0) 'Checkpoint exists before first check'
 Assert-Condition (@($script:checkpoints | Where-Object { $_.Status -eq 'Incomplete' -and $_.Count -gt 0 }).Count -gt 0) 'Completed checks saved incrementally'
@@ -91,7 +91,7 @@ Assert-Condition ($limits[0].Arguments.MaxEvents -eq 11 -and $limits[1].Argument
 Assert-Condition ($limits[1].Arguments.Providers -contains 'AnotherDriver') 'NIC providers derived from driver services'
 
 $script:executed = @()
-$active = Invoke-SnapshotRun -RepositoryRoot $root -CheckExecutor $mock -IncludeConnectivityTests -IncludeGatewayPing -TcpDestinations @('synthetic.invalid')
+$active = Invoke-SnapshotRun -TestOutputRoot (Join-Path $root 'output\tests\orchestration') -RepositoryRoot $root -CheckExecutor $mock -IncludeConnectivityTests -IncludeGatewayPing -TcpDestinations @('synthetic.invalid')
 foreach ($kind in @('Gateway','DNS','TCP','HTTPS')) {
     Assert-Condition (@($active.Evidence.Checks | Where-Object { $_.Request.Kind -eq $kind -and $_.Data[0].Outcome -eq 'Failed' }).Count -gt 0) "Simulated $kind failure retained"
 }
@@ -101,7 +101,7 @@ Assert-Condition ($active.Evidence.RunId -ne $run.Evidence.RunId) 'Each run gets
 
 $interrupt = { param($evidence, $directory) if ($evidence.Checks.Count -eq 2) { $script:interruptedDirectory = $directory; throw 'Synthetic interruption' } }
 $interrupted = $false
-try { $null = Invoke-SnapshotRun -RepositoryRoot $root -CheckExecutor $mock -CheckpointObserver $interrupt } catch { $interrupted = $true }
+try { $null = Invoke-SnapshotRun -TestOutputRoot (Join-Path $root 'output\tests\orchestration') -RepositoryRoot $root -CheckExecutor $mock -CheckpointObserver $interrupt } catch { $interrupted = $true }
 $partialPath = Join-Path $script:interruptedDirectory 'evidence.json'
 $partial = Read-DiagnosticEvidence $partialPath
 Assert-Condition ($interrupted -and $partial.CollectionStatus -eq 'Incomplete' -and $null -eq $partial.CompletedAt -and $partial.Checks.Count -eq 2) 'Interrupted collection retains completed checks and incomplete identity'

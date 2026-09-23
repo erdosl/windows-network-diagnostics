@@ -71,6 +71,92 @@ function Get-CheckSummary {
     }
 }
 
+function Get-NetworkDisplayLabel {
+    param([ValidateSet('AddressFamily','ConnectionState')][string]$Kind, $Value)
+    if ($null -eq $Value -or [string]$Value -eq '') { return 'Unknown (missing)' }
+    $map = $(if ($Kind -eq 'AddressFamily') { @{ '2'='IPv4'; '23'='IPv6'; 'InterNetwork'='IPv4'; 'InterNetworkV6'='IPv6'; 'IPv4'='IPv4'; 'IPv6'='IPv6' } }
+        else { @{ '0'='Disconnected'; '1'='Connected'; 'Disconnected'='Disconnected'; 'Connected'='Connected' } })
+    if ($map.ContainsKey([string]$Value)) { return $map[[string]$Value] }
+    'Unknown (' + [string]$Value + ')'
+}
+
+# Deterministic wrapping avoids Format-Table dropping columns in narrow hosts.
+function Split-ConsoleLine {
+    param([string]$Text, [int]$Width)
+    $clean = $Text -replace '[\x00-\x1f\x7f]', ' '
+    if (-not $clean) { return '' }
+    for ($offset = 0; $offset -lt $clean.Length; $offset += $Width) {
+        $clean.Substring($offset, [Math]::Min($Width, $clean.Length - $offset))
+    }
+}
+
+function Format-DnsConsoleReport {
+    param([object[]]$Checks, [ValidateRange(20,1000)][int]$Width = 80)
+    $rows = @(Get-DnsResultSummary $Checks)
+    if (-not $rows.Count) { return }
+    Split-ConsoleLine 'DNS results: Outcome is the probe result, not collection status.' $Width
+    if ($Width -ge 60) {
+        $widths = @( [int](($Width - 6) * .32), 5, 9, 0 )
+        $widths[3] = $Width - 6 - $widths[0] - $widths[1] - $widths[2]
+        $all = @([pscustomobject]@{Server='Server';QueryType='Type';ProbeOutcome='Outcome';Reason='Skip/error reason'}) + $rows
+        foreach ($row in $all) {
+            $cells = @($row.Server,$row.QueryType,$row.ProbeOutcome,$row.Reason)
+            $parts = @(); $height = 1
+            for ($c=0; $c -lt 4; $c++) {
+                $pieces = @(Split-ConsoleLine ([string]$cells[$c]) $widths[$c])
+                $parts += ,$pieces
+                $height = [Math]::Max($height,$pieces.Count)
+            }
+            for ($line=0; $line -lt $height; $line++) {
+                $columns = for ($c=0; $c -lt 4; $c++) {
+                    $value = $(if ($line -lt $parts[$c].Count) { $parts[$c][$line] } else { '' })
+                    $value.PadRight($widths[$c])
+                }
+                ($columns -join '  ').TrimEnd()
+            }
+        }
+    } else {
+        foreach ($row in $rows) {
+            foreach ($field in @('Server','QueryType','ProbeOutcome','Reason')) { Split-ConsoleLine ($field + ': ' + $row.$field) $Width }
+            ''
+        }
+    }
+    foreach ($group in @($rows | Group-Object ProbeOutcome)) { Split-ConsoleLine ($group.Name + ': ' + $group.Count) $Width }
+    Split-ConsoleLine 'Configured associations (not observed query paths), once per target:' $Width
+    foreach ($group in @($rows | Group-Object TargetId)) {
+        $row = $group.Group[0]
+        Split-ConsoleLine ('Server: ' + $row.Server) $Width
+        Split-ConsoleLine $row.ConfiguredAssociations $Width
+        if ($row.ScopeUncertainty) { Split-ConsoleLine ('Scope: ' + $row.ScopeUncertainty) $Width }
+    }
+}
+
+function Get-DnsResultSummary {
+    param([object[]]$Checks)
+    foreach ($check in $Checks) {
+        if ($check.Request.Kind -ne 'DNS' -and $check.Name -notlike 'Connectivity:DNS:*') { continue }
+        $probe = @($check.Data | Where-Object Kind -eq 'DNS' | Select-Object -First 1)
+        $target = $check.Request.DnsTarget
+        if ($probe.Count -gt 0 -and $probe[0].DnsTarget) { $target = $probe[0].DnsTarget }
+        $p = $(if ($probe.Count) { $probe[0] } else { $null })
+        $reason = $(if ($p.Outcome -eq 'Skipped') { $p.SkipReason } elseif ($p.DnsError) {
+            $p.DnsError.Classification + ' [' + $p.DnsError.Code + ']: ' + $p.DnsError.Message
+        } elseif ($check.Status -ne 'Success') { 'Collection ' + $check.Status + ': ' + $check.Error.Message }
+        elseif ($p.Error) { $p.Error.Message } else { '-' })
+        [pscustomobject]@{ TargetId = $(if ($target.TargetId) { $target.TargetId } else { $check.Request.Destination })
+            Reason = $reason; Server = $(if ($target) { $target.Server } else { $check.Request.Destination })
+            ConfiguredAssociations = $(if ($target) { ($target.ConfiguredAssociations | ForEach-Object { 'Interface ' + $_.InterfaceIndex + ' (' + $_.InterfaceAlias + '); adapters: ' + (($_.Adapters | ForEach-Object { $_.Name + '/' + $_.Status + '/' + $_.Kind }) -join ', ') + '; IP states: ' + (($_.IPInterfaceStates | ForEach-Object { (Get-NetworkDisplayLabel AddressFamily $_.AddressFamily) + '/' + (Get-NetworkDisplayLabel ConnectionState $_.ConnectionState) }) -join ', ') }) -join '; ' } else { 'Unavailable' })
+            Classification = $target.Classification; SelectionReason = $target.Reason
+            ScopeUncertainty = ($target.ScopeUncertainty -join '; ')
+            QueryName = $(if ($p -and $p.Evidence.QueryName) { $p.Evidence.QueryName } else { $check.Request.QueryName })
+            QueryType = $(if ($p -and $p.Evidence.QueryType) { $p.Evidence.QueryType } else { $check.Request.QueryType })
+            CollectionStatus = $check.Status; ProbeOutcome = $(if ($p) { $p.Outcome } else { 'Unknown' })
+            DnsErrorClassification = $p.DnsError.Classification; DnsErrorCode = $p.DnsError.Code
+            TimeoutScope = $(if ($check.Status -eq 'TimedOut') { 'Worker' } else { $p.TimeoutScope })
+            DurationMs = $(if ($p) { $p.DurationMs } else { $check.DurationMs }) }
+    }
+}
+
 function Write-DiagnosticReport {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][string]$OutputDirectory)
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force -ErrorAction Stop
@@ -110,6 +196,22 @@ function Write-DiagnosticReport {
         foreach ($field in @('Name','CollectionStatus','ProbeOutcome','TimeoutScope')) {
             $null = $html.Append('<td>' + (& $encode $row.$field) + '</td>')
         }
+        $null = $html.Append('</tr>')
+    }
+    $null = $html.Append('</table>')
+    $dnsRows = @(Get-DnsResultSummary $Evidence.Checks)
+    $null = $html.Append('<h2>DNS targets and results</h2><p>Configured associations are not observed query paths. Legacy discovery addresses have unconfirmed operational use; their presence or failure does not establish a DNS fault.</p>')
+    $null = $html.Append('<p>Probe outcome counts: ')
+    foreach ($outcome in @('Success','Failed','Skipped','TimedOut','Unknown')) {
+        $null = $html.Append($outcome + '=' + @($dnsRows | Where-Object ProbeOutcome -eq $outcome).Count + ' ')
+    }
+    $null = $html.Append('</p><table><tr>')
+    $dnsFields = @('Server','ConfiguredAssociations','Classification','SelectionReason','ScopeUncertainty','QueryName','QueryType','CollectionStatus','ProbeOutcome','DnsErrorClassification','DnsErrorCode','TimeoutScope','DurationMs')
+    foreach ($field in $dnsFields) { $null = $html.Append('<th>' + $field + '</th>') }
+    $null = $html.Append('</tr>')
+    foreach ($row in $dnsRows) {
+        $null = $html.Append('<tr>')
+        foreach ($field in $dnsFields) { $null = $html.Append('<td>' + (& $encode $row.$field) + '</td>') }
         $null = $html.Append('</tr>')
     }
     $null = $html.Append('</table>')

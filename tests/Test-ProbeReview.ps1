@@ -67,7 +67,7 @@ Assert-Review ($row.CollectionStatus -eq 'TimedOut' -and $row.ProbeOutcome -like
 $hostile = [pscustomobject]@{ Name = '<check>'; Status = '<status>'; Data = @([pscustomobject]@{ Outcome = '<outcome>'; TimeoutScope = '<scope>' }) }
 $checks = @($dns,$refused,$tls,$http,$timeout,$worker,$hostile)
 $evidence = [pscustomobject]@{ Checks = $checks; Findings = Get-DiagnosticFindings $checks }
-$directory = Join-Path $root ('output\review-tests-' + [guid]::NewGuid().ToString('N'))
+$directory = Join-Path $root ('output\tests\review-' + [guid]::NewGuid().ToString('N'))
 $paths = Write-DiagnosticReport $evidence $directory
 $html = Get-Content -Raw $paths.HtmlPath
 Assert-Review ($html -match '<th>CollectionStatus</th><th>ProbeOutcome</th>' -and $html -match '<td>Success</td><td>HttpError</td>' -and $html -match '<td>Success</td><td>Failed</td>') 'HTML prominently separates successful collection from failed tests'
@@ -99,6 +99,6 @@ $executor = {
     }
     [pscustomobject]@{ Name = $Definition.Name; Status = 'Success'; Data = @(); Error = $null }
 }
-$run = Invoke-SnapshotRun -RepositoryRoot $root -CheckTimeoutSeconds 1 -ProbeTimeoutSeconds 2 -ProbeWorkerOverheadSeconds 10 -IncludeConnectivityTests -CheckExecutor $executor
+$run = Invoke-SnapshotRun -TestOutputRoot (Join-Path $root 'output\tests\orchestration') -RepositoryRoot $root -CheckTimeoutSeconds 1 -ProbeTimeoutSeconds 2 -ProbeWorkerOverheadSeconds 10 -IncludeConnectivityTests -CheckExecutor $executor
 Assert-Review ($script:probeCount -eq 3 -and $run.Evidence.CollectionStatus -eq 'Complete') 'Resolution scheduling completes with explicit budgets and mocked probes'
 Write-Host "PASS: $script:count review assertions; synthetic failures and loopback-only TCP."
