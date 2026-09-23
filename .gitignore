@@ -1,4 +1,4 @@
-# Generated diagnostic reports and local output
+# Generated diagnostic reports and local output (including synthetic test reports)
 /reports/
 /diagnostic-reports/
 /diagnostics/
