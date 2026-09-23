@@ -2,17 +2,25 @@
 [CmdletBinding()]
 param(
     [ValidateRange(1,168)][int]$LookbackHours = 24,
-    [ValidateRange(1,1000)][int]$MaxEventsPerLog = 200
+    [ValidateRange(1,1000)][int]$MaxEventsPerLog = 200,
+    [ValidateRange(1,1000)][int]$MaxNicEvents = 200,
+    [ValidateRange(1,1000)][int]$MaxPowerEvents = 100,
+    [ValidateRange(1,600)][int]$CheckTimeoutSeconds = 30,
+    [switch]$IncludeConnectivityTests,
+    [switch]$IncludeGatewayPing,
+    [ValidateCount(1,16)][string[]]$TcpDestinations = @('1.1.1.1','2606:4700:4700::1111'),
+    [ValidateRange(1,65535)][int]$TcpPort = 443,
+    [string]$DnsQueryName = 'example.com',
+    [string]$HttpsEndpoint = 'https://example.com/',
+    [ValidateRange(1,60)][int]$ProbeTimeoutSeconds = 10
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'src\Core.ps1')
-. (Join-Path $PSScriptRoot 'src\Collection.ps1')
+foreach ($file in @('Core.ps1','State.ps1','Execution.ps1','Events.ps1','Collection.ps1','Connectivity.ps1','Orchestration.ps1')) {
+    . (Join-Path (Join-Path $PSScriptRoot 'src') $file)
+}
 if ($env:OS -ne 'Windows_NT') { throw 'This collector requires Windows 10/11.' }
-$snapshot = Get-NetworkSnapshot -LookbackHours $LookbackHours -MaxEventsPerLog $MaxEventsPerLog
-$runName = 'snapshot-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '-' + [guid]::NewGuid().ToString('N').Substring(0,8)
-$destination = Join-Path (Join-Path $PSScriptRoot 'output') $runName
-$paths = Write-DiagnosticReport -Evidence $snapshot -OutputDirectory $destination
-$snapshot.Checks | Select-Object Name, Status | Format-Table -AutoSize | Out-Host
+$paths = Invoke-SnapshotRun -RepositoryRoot $PSScriptRoot @PSBoundParameters
+$paths.Evidence.Checks | Select-Object Name, Status | Format-Table -AutoSize | Out-Host
 Write-Host "JSON evidence: $($paths.JsonPath)"
 Write-Host "HTML summary:  $($paths.HtmlPath)"
-$paths
+$paths | Select-Object JsonPath,HtmlPath

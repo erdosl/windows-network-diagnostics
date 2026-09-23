@@ -63,7 +63,13 @@ function Write-DiagnosticReport {
     $encode = { param($Value) [System.Net.WebUtility]::HtmlEncode([string]$Value) }
     $html = [System.Text.StringBuilder]::new()
     $null = $html.Append('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Network snapshot</title><style>body{font:16px system-ui;margin:2rem;max-width:1000px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6;padding:1rem}li{margin:.5rem 0}</style></head><body><h1>Network snapshot</h1>')
-    $null = $html.Append('<p>Collected: ' + (& $encode $Evidence.CollectedAt) + '</p><p>Read-only evidence. A snapshot does not establish a root cause or prove connectivity.</p>')
+    $null = $html.Append('<p>Collected: ' + (& $encode $Evidence.CollectedAt) + '</p><p>Read-only configuration evidence with opt-in connectivity probes. A snapshot does not establish a root cause or prove connectivity. Failed ICMP is not proof of unreachability; a failed DNS query alone does not establish a DNS root cause.</p>')
+    $null = $html.Append('<h2>Collection identity and state</h2><dl>')
+    foreach ($field in @('ComputerName','RunId','CollectorVersion','SchemaVersion','IsElevated','PowerShellVersion','StartedAt','CompletedAt','CollectionStatus','PendingCheck','Revision','CollectionError')) {
+        $null = $html.Append('<dt>' + $field + '</dt><dd>' + (& $encode $Evidence.$field) + '</dd>')
+    }
+    $null = $html.Append('</dl><p>Incomplete means collection has not finished. Complete means all planned checks were attempted, not that they succeeded. evidence.json is authoritative; this HTML may reflect an older checkpoint.</p>')
+    $null = $html.Append('<h2>Collection parameters</h2><pre>' + (& $encode (ConvertTo-Json -InputObject $Evidence.Parameters -Depth 8)) + '</pre>')
     foreach ($section in @('Observations', 'Hypotheses')) {
         $null = $html.Append('<h2>' + $section + '</h2><ul>')
         $items = @($Evidence.Findings.$section)
@@ -71,7 +77,17 @@ function Write-DiagnosticReport {
         foreach ($item in $items) { $null = $html.Append('<li>' + (& $encode $item) + '</li>') }
         $null = $html.Append('</ul>')
     }
-    $null = $html.Append('<h2>Checks and evidence</h2>')
+    $null = $html.Append('<h2>Interfaces</h2><p>Joined by interface index within this snapshot. Default routes are candidates, not proof of an active gateway. Empty lists may reflect missing source checks; see SourceStatus.</p>')
+    $interfaces = @(Get-InterfaceSummary -Checks $Evidence.Checks)
+    if ($interfaces.Count -eq 0) { $null = $html.Append('<p>No interface data available. See check statuses below.</p>') }
+    foreach ($interface in $interfaces) {
+        $null = $html.Append('<h3>Interface ' + (& $encode $interface.InterfaceIndex) + ': ' + (& $encode ($interface.Adapters.Name -join ', ')) + '</h3><table>')
+        foreach ($field in @('Adapters','Addresses','DHCP','DefaultRoutes','InterfaceMetrics','DNS','SourceStatus')) {
+            $null = $html.Append('<tr><th>' + $field + '</th><td><pre>' + (& $encode (ConvertTo-Json -InputObject $interface.$field -Depth 12)) + '</pre></td></tr>')
+        }
+        $null = $html.Append('</table>')
+    }
+    $null = $html.Append('<h2>Checks and raw evidence</h2>')
     foreach ($check in $Evidence.Checks) {
         $null = $html.Append('<h3>' + (& $encode $check.Name) + ': ' + (& $encode $check.Status) + '</h3><pre>')
         $detail = ConvertTo-Json -InputObject $check -Depth 14
@@ -79,7 +95,8 @@ function Write-DiagnosticReport {
     }
     $null = $html.Append('</body></html>')
     # Explicit UTF-8 works on Windows PowerShell 5.1 and does not depend on console encoding.
-    [IO.File]::WriteAllText($jsonPath, $json, [Text.UTF8Encoding]::new($false))
-    [IO.File]::WriteAllText($htmlPath, $html.ToString(), [Text.UTF8Encoding]::new($false))
+    # JSON is the canonical checkpoint. Each file is atomically replaced, not the pair.
+    Set-AtomicText -Path $jsonPath -Text $json
+    Set-AtomicText -Path $htmlPath -Text $html.ToString()
     [pscustomobject]@{ JsonPath = $jsonPath; HtmlPath = $htmlPath }
 }

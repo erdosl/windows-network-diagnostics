@@ -3,6 +3,7 @@
 /diagnostic-reports/
 /diagnostics/
 /captures/
+# Includes schema-v2 checkpoints, .bak recovery files, workers, and validation copies.
 /output/
 /outputs/
 /artifacts/

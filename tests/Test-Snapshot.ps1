@@ -3,6 +3,8 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $root 'src\Core.ps1')
 . (Join-Path $root 'src\Collection.ps1')
+. (Join-Path $root 'src\State.ps1')
+. (Join-Path $root 'src\Events.ps1')
 $script:assertions = 0
 function Assert-True {
     param([bool]$Condition, [string]$Message)
@@ -84,13 +86,17 @@ function Get-WinEvent {
     param([Parameter(ParameterSetName='List')][string]$ListLog,
         [Parameter(ParameterSetName='Query')][hashtable]$FilterHashtable,
         [Parameter(ParameterSetName='Query')][int]$MaxEvents)
-    if ($PSCmdlet.ParameterSetName -eq 'List') { return [pscustomobject]@{ IsEnabled = ($ListLog -ne 'Disabled') } }
+    if ($PSCmdlet.ParameterSetName -eq 'List') { return [pscustomobject]@{ IsEnabled = ($ListLog -ne 'Disabled'); ProviderNames = @('Synthetic') } }
     $script:seenFilter = $FilterHashtable
     $script:seenLimit = $MaxEvents
     if ($FilterHashtable.LogName -eq 'Empty') {
         Write-Error -Message 'No events' -ErrorId 'NoMatchingEventsFound' -Category ObjectNotFound
     } else {
-        1..$MaxEvents | ForEach-Object { [pscustomobject]@{ Id = $_; Message = 'Synthetic event' } }
+        1..$MaxEvents | ForEach-Object {
+            $event = [pscustomobject]@{ Id = $_; Message = 'Synthetic event'; TimeCreated = [datetime]'2026-01-01T00:01:00' }
+            $event | Add-Member -MemberType ScriptMethod -Name ToXml -Value { '<Event><EventData><Data Name="Detail">raw &amp; structured</Data></EventData></Event>' }
+            $event
+        }
     }
 }
 $start = [datetime]'2026-01-01T00:00:00'
@@ -99,6 +105,9 @@ $events = Get-RecentNetworkEvents -LogName 'System' -StartTime $start -EndTime $
 Assert-True ($script:seenFilter.StartTime -eq $start -and $script:seenFilter.EndTime -eq $end) 'Event time bounds passed to Windows filter'
 Assert-True ($script:seenLimit -eq 3 -and $events.Events.Count -eq 3 -and $events.LimitReached) 'Event count cap and limit indicator'
 Assert-True ($script:seenFilter.ProviderName[0] -eq 'Synthetic') 'System provider filter retained'
+Assert-True ($events.Events[0].Xml -like '*<EventData>*raw &amp; structured*') 'Structured event XML preserved'
+$unsupported = Get-RecentNetworkEvents -LogName 'System' -StartTime $start -EndTime $end -MaxEvents 3 -Providers @('MissingProvider')
+Assert-True ($unsupported.QueryStatus -eq 'Unavailable' -and $unsupported.Providers[0].Status -eq 'Unavailable' -and $unsupported.Events.Count -eq 0) 'Unsupported providers are explicit, never an unfiltered query'
 $emptyEvents = Get-RecentNetworkEvents -LogName 'Empty' -StartTime $start -EndTime $end -MaxEvents 3 -Providers @()
 Assert-True ($emptyEvents.Events.Count -eq 0 -and -not $emptyEvents.LimitReached) 'No matching events is successful empty evidence'
 $disabled = Invoke-DiagnosticCheck 'DisabledLog' { Get-RecentNetworkEvents -LogName 'Disabled' -StartTime $start -EndTime $end -MaxEvents 3 -Providers @() }

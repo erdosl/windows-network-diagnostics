@@ -1,107 +1,195 @@
 # Windows network diagnostics
 
-Milestone 1 is a read-only Windows 10/11 snapshot collector for investigating
-intermittent DHCP, duplicate-IP, DNS, gateway, and Ethernet/Wi-Fi problems.
-It requires Windows PowerShell 5.1 and built-in Windows commands only.
+Milestone 2 (`0.2.0`) collects bounded Windows 10/11 network snapshots for
+intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
+It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
-## Usage
+## Run a passive snapshot
 
-Open Windows PowerShell in the repository directory:
+From the repository directory:
 
 ```powershell
 powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1
 ```
 
-To collect up to 100 events per selected log over the preceding six hours:
+Or use an absolute script path from any working directory. Quote paths containing
+spaces. No installation or downloaded dependencies are needed. The parent compiles
+`src/NativeProcess.cs` using built-in `Add-Type` to supervise worker processes.
 
 ```powershell
-powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -LookbackHours 6 -MaxEventsPerLog 100
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -LookbackHours 6 -MaxEventsPerLog 100 -MaxNicEvents 100 -MaxPowerEvents 50 -CheckTimeoutSeconds 30
 ```
 
-`LookbackHours` accepts 1-168 (default 24). `MaxEventsPerLog` accepts 1-1000
-(default 200). Run as a normal user first. Restricted checks are recorded in the
-report; an administrator may choose to run from an elevated PowerShell window
-for additional access. If execution policy blocks script files, use your
-organization's approved execution/signing process. The collector never changes
-execution policy, network settings, adapters, leases, or event-log configuration.
-It performs no active probes and never requests credentials or exports Wi-Fi keys.
+Run as a normal user first. Inaccessible checks are recorded rather than requiring
+administration. An administrator can choose to run the same command elevated.
+If policy blocks scripts or organizational controls block native compilation,
+use your approved execution/signing process. Never bypass execution restrictions.
+The collector never changes execution policy, adapters, network settings, leases,
+or event-log configuration, and never exports Wi-Fi keys or requests credentials.
 
-Each run prints paths to a unique directory under the repository:
+## Opt-in connectivity tests
+
+**No active probes run without `-IncludeConnectivityTests`.** Enabling it sends
+DNS queries, TCP connections, and HTTPS HEAD requests. Gateway neighbour inspection
+is included; gateway ICMP additionally requires `-IncludeGatewayPing`.
+
+```powershell
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -IncludeConnectivityTests -IncludeGatewayPing -TcpDestinations 1.1.1.1 -TcpPort 443 -DnsQueryName example.com -HttpsEndpoint https://example.com/ -ProbeTimeoutSeconds 10
+```
+
+To pass multiple TCP destinations, invoke the script directly inside Windows
+PowerShell (its native `-File` command-line parser does not reliably pass arrays):
+
+```powershell
+.\Collect-NetworkDiagnostics.ps1 -IncludeConnectivityTests -TcpDestinations @('1.1.1.1','2606:4700:4700::1111')
+```
+
+Default targets, used only after opt-in, are TCP port 443 on `1.1.1.1` and
+`2606:4700:4700::1111`, A/AAAA queries for `example.com` against each distinct
+configured DNS server, and `https://example.com/`. Hostnames are resolved and TCP/
+HTTPS results are collected separately for each returned IPv4/IPv6 address.
+Names may be disclosed to DNS infrastructure and destination services. Do not
+supply secrets in destinations. HTTPS endpoints reject user information, query
+strings, and fragments; credentials, client certificates, cookies, response bodies,
+and response authentication headers are not collected or sent.
+
+HTTPS uses a direct TCP/TLS connection with normal certificate validation and an
+HTTP/1.1 HEAD request. It does not use configured proxies, follow redirects, or
+alter machine TLS settings. HTTP error status lines are retained as `HttpError`;
+HEAD rejection is not proof of a network failure. Only the first HTTP response
+status line is collected (bounded to 4096 characters).
+
+## Parameters
+
+| Parameter | Default | Bounds / meaning |
+| --- | --- | --- |
+| `LookbackHours` | 24 | 1-168; event history ending at collection start |
+| `MaxEventsPerLog` | 200 | 1-1000; System network group and each dedicated log |
+| `MaxNicEvents` | 200 | 1-1000; independent System NIC group |
+| `MaxPowerEvents` | 100 | 1-1000; independent System power group |
+| `CheckTimeoutSeconds` | 30 | 1-600; deadline per isolated check, including worker startup |
+| `IncludeConnectivityTests` | off | Explicit permission for active probes |
+| `IncludeGatewayPing` | off | Requires connectivity switch; optional ICMP |
+| `TcpDestinations` | two literals above | 1-16 hostnames or IP literals |
+| `TcpPort` | 443 | 1-65535 |
+| `DnsQueryName` | example.com | A and AAAA queried independently |
+| `HttpsEndpoint` | https://example.com/ | HTTPS endpoint without credentials/query/fragment |
+| `ProbeTimeoutSeconds` | 10 | 1-60; active-check deadline, capped by check timeout |
+
+Each check runs in a fresh `powershell.exe -NoProfile -NonInteractive -File`
+worker, with explicit serialized inputs. A Windows Job Object owns the worker
+and descendants, including native commands. Deadline or parent termination kills
+the process tree. Workers write only private scratch results; only the parent
+writes evidence/HTML. Cleanup can add up to five seconds beyond a check deadline.
+Worker startup, provider initialization, and source selection consume the same
+budget as the probe. Socket stage timeouts do not extend the outer deadline.
+There is no total snapshot deadline; checks are sequential, not simultaneous.
+
+## Evidence and reports
+
+Paths are independent of the caller's working directory:
 
 ```text
-output/snapshot-<timestamp>-<id>/evidence.json
-output/snapshot-<timestamp>-<id>/summary.html
+<repository>/output/snapshot-<ComputerName>-<RunId>/evidence.json
+<repository>/output/snapshot-<ComputerName>-<RunId>/summary.html
 ```
 
-Open the printed HTML path in a browser. The summary is self-contained, with no
-scripts or external resources. All dynamic content is HTML-encoded. JSON preserves
-evidence, schema version, capture timestamps, parameters, and check results.
+Open the printed HTML path in a browser. All dynamic values are HTML-encoded;
+there are no scripts or external resources. The interface section joins sources
+by index, retains all addresses and default routes, shows family-specific metrics,
+and reports unavailable sources. It does not choose an "active gateway" from
+configuration. Raw check evidence remains below the summaries and in JSON.
 
-Individual check failures do not prevent later checks or report generation.
-Check statuses are `Success`, `Unavailable`, `PermissionDenied`, or `Failed`, with
-error details. A successful command exit does not mean all checks succeeded.
-Fatal setup or report-write errors fail the command.
+Schema **2** adds `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
+`StartedAt`/`CompletedAt` with offsets, `CollectionStatus`, `Revision`, `PendingCheck`,
+`PlannedChecks`, `Parameters`, and `CollectionError`. `CollectedAt` remains an alias
+for start time. Parameters formerly at the root now live under `Parameters`.
+Checks include their name, request arguments, start/end, duration, deadline,
+worker PID, status, data, and error details. `PlannedChecks` expands as work is
+scheduled (including target resolution); it is not a fixed upfront list.
 
-## Evidence collected
+A directory and `Incomplete` checkpoint are created before collection. The parent
+saves before starting and after finishing each check, using flushed temporary
+files and atomic replacement with `.bak` recovery copies. Brief file-sharing
+conflicts are retried for up to 1.8 seconds; unsafe delete-then-move is never used.
+JSON is authoritative; HTML can lag by one revision if interrupted between writes.
+The two files are not an atomic pair. Old HTML identifies its revision and may
+show an older incomplete state. A hard interruption leaves the last checkpoint
+`Incomplete`, with no completion timestamp and the pending check where known.
 
-- Windows version/build, timestamps with UTC offset, and Windows time zone.
-- All Windows-exposed adapters including hidden adapters, MACs, status, link speed,
-  interface types, hardware flags, and driver details; separate signed NIC drivers
-  include device IDs for correlation.
-- Per-interface IPv4/IPv6 addresses and prefixes, address origins/states, DHCP
-  settings/server/lease times where WMI exposes them, gateways, DNS servers, and
-  DNS suffixes. Interface indices and device IDs support correlation.
-- Routes, interface metrics, and IPv4/IPv6 neighbour cache entries.
-- Localized `netsh wlan show interfaces` output only, never profile/key export.
-- Recent System DHCP, TCP/IP, NDIS, DNS Client, and Kernel-PnP events, plus DHCP
-  Admin/Operational and WLAN/Wired AutoConfig Operational logs. Queries are bounded
-  by capture-time window and per-log count, newest first. `LimitReached` means
-  older matching events may have been omitted. Empty results differ from failures.
-  Disabled logs are recorded as unavailable and are never enabled.
+`Complete` means all scheduled checks were attempted, not that they succeeded.
+Statuses are `Success`, `Failed`, `Unavailable`, `PermissionDenied`, `TimedOut`,
+and `Skipped`. A successful probe worker can contain a failed network `Outcome`:
+check status describes execution, while `Data[].Outcome` describes the test.
+A killed probe retains destination/options in `Request`; unfinished worker data
+is not presented as completed evidence. Report-write errors fail the command.
 
-APIPA (`169.254.0.0/16`) and simultaneously up physical Ethernet/Wi-Fi adapters
-are observations, not proven root causes. Dual-link detection uses interface types
-6 and 71 and hardware flags, not localized names. IPv6 link-local is not APIPA.
-Hypotheses appear in a separate section. Missing checks limit conclusions.
+To inspect/recover evidence in a policy-permitted Windows PowerShell session:
 
-## Tests
+```powershell
+. .\src\State.ps1
+$evidence = Read-DiagnosticEvidence -Path 'C:\path\to\output\snapshot-computer-runid\evidence.json'
+```
 
-Run the dependency-free synthetic suite:
+A corrupt/unreadable primary falls back to `.bak`, marked `Incomplete` with a
+`RecoveryNote`. Recovery does not resume collection or silently mark it complete.
+Backup files and temporary/scratch leftovers are also private diagnostic output.
+
+## Collection scope and interpretation
+
+- Windows version/time zone; all Windows-exposed adapters including hidden ones,
+  MACs, status, link speed, NIC driver details and driver service names.
+- Per-interface IPv4/IPv6 addressing, prefixes/states, DHCP configuration/server/
+  lease times where available, gateways, DNS, routes, metrics, and neighbours.
+- Connection-only `netsh wlan show interfaces`; no profile or key export.
+- Separate System network (DHCP/TCP-IP/DNS), NIC (NDIS/Kernel-PnP plus discovered
+  NIC service names), and power (sleep/wake/boot/power transitions) queries.
+  DHCP Admin/Operational and WLAN/Wired AutoConfig logs have their own caps.
+  Each event retains readable text and XML. Unsupported providers are listed;
+  disabled/inaccessible logs are explicit and are never enabled. `LimitReached`
+  indicates older matching events may have been omitted. `QueryStatus` can be
+  unavailable even when a worker successfully reports provider availability.
+- Optional probes retain destination, address family, request, timing, outcome,
+  errors, and route predictions. TCP/HTTPS additionally retain actual local/remote
+  socket endpoints when a connection was established, even if TLS later fails.
+  Matching interfaces are derived from the observed local address; ambiguous
+  matches are retained. DNS/ICMP source interfaces are not observed. No test is
+  labelled Ethernet/Wi-Fi based only on a predicted route or configured gateway.
+
+Observations and hypotheses remain separate. APIPA and simultaneous physical
+Ethernet/Wi-Fi links are flags, not diagnoses. IPv6 link-local is not APIPA.
+No ping reply does not prove unreachability; one failed DNS query does not prove
+DNS is the cause. A snapshot cannot prove an intermittent fault or duplicate IP.
+
+## Tests and validation
+
+Run these actual files using Windows PowerShell 5.1:
 
 ```powershell
 powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1
+powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
+powershell.exe -NoProfile -File .\tests\Test-Probes.ps1
 ```
 
-Tests cover APIPA boundaries, IPv4/IPv6 and invalid addresses, dual-link flags,
-failure isolation, permission/unavailable statuses, JSON round trips, UTF-8, HTML
-injection escaping, empty reports, and event query bounds using stub commands.
-Synthetic artifacts remain in ignored `output/tests-<id>/` for inspection.
+They are dependency-free. Tests use synthetic data/mocked collectors, real local
+worker timeouts/child cleanup, and loopback-only socket failures. They never
+probe an external network. Artifacts remain under ignored `output/` directories.
+See [validation results](docs/VALIDATION.md) for the actual environment, commands,
+results, file-execution validation, and remaining unverified coverage.
 
-See [validation results](docs/VALIDATION.md) for the exact tested environment,
-results, and this host's file-execution-policy limitation.
+## Privacy, limitations, and deferred work
 
-## Privacy and Git
+Keep all generated artifacts under ignored `output/`. Addresses, MACs, SSIDs,
+computer names, event XML/messages, and connection endpoints are sensitive.
+Windows event contents are not redacted. Review before sharing. Ignore rules
+cannot detect credentials embedded in source or untrack previously added files.
 
-Keep generated diagnostics in `output/`, which is ignored by Git. Other report
-and capture directories, logs, trace files, archives, credentials, keys, and local
-configuration are also excluded. Ignore rules cannot detect embedded secrets or
-untrack files already in Git. Commit only reviewed source and documentation.
+Collection is sequential and reflects changing state. Driver/event availability
+varies; discovered NIC service names need not match registered event providers,
+so vendor event coverage is best effort, not exhaustive. DHCP lease fields are
+primarily IPv4. Localized Wi-Fi output and Windows permissions/location settings
+may limit checks. A constrained or policy-blocked worker is reported as failure,
+not bypassed. Atomic file replacement requires a filesystem that supports it.
 
-Reports contain sensitive metadata: addresses, MACs, SSIDs, and Windows event
-messages. Event messages are not automatically redacted; review before sharing.
-
-## Limitations and deferred work
-
-A single snapshot cannot prove an intermittent outage, address conflict, DNS
-failure, or gateway fault. Collection is sequential, not an atomic view of state.
-There is no per-command timeout; stalled Windows management services may delay
-completion. Available fields depend on Windows and driver support. WMI DHCP
-lease fields primarily describe IPv4; full DHCPv6 leases are not promised.
-Wi-Fi output is localized and may be restricted by permissions/location settings.
-Vendor-specific link-event providers are not exhaustively covered. Disabled logs
-and missing historical events cannot be recovered by this collector.
-
-Monitoring, subnet scanning, Nmap, vendor lookup, and packet capture are deferred.
-There is no Eero or UniFi management integration.
-
-See [LICENSE](LICENSE).
+Continuous monitoring, subnet scanning, Nmap, vendor lookup, packet capture, and
+Eero/UniFi integrations are out of scope. See [LICENSE](LICENSE).
