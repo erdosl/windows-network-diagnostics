@@ -37,7 +37,7 @@ function Read-DiagnosticEvidence {
 function New-SnapshotIdentity {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     [pscustomobject]@{ ComputerName = [Environment]::MachineName; RunId = [guid]::NewGuid().ToString('D')
-        CollectorVersion = '0.2.0'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        CollectorVersion = '0.2.1'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         StartedAt = [DateTimeOffset]::Now.ToString('o') }
 }
 

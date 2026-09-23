@@ -12,7 +12,8 @@ param(
     [ValidateRange(1,65535)][int]$TcpPort = 443,
     [string]$DnsQueryName = 'example.com',
     [string]$HttpsEndpoint = 'https://example.com/',
-    [ValidateRange(1,60)][int]$ProbeTimeoutSeconds = 10
+    [ValidateRange(1,60)][int]$ProbeTimeoutSeconds = 10,
+    [ValidateRange(5,120)][int]$ProbeWorkerOverheadSeconds = 15
 )
 $ErrorActionPreference = 'Stop'
 foreach ($file in @('Core.ps1','State.ps1','Execution.ps1','Events.ps1','Collection.ps1','Connectivity.ps1','Orchestration.ps1')) {
@@ -20,7 +21,7 @@ foreach ($file in @('Core.ps1','State.ps1','Execution.ps1','Events.ps1','Collect
 }
 if ($env:OS -ne 'Windows_NT') { throw 'This collector requires Windows 10/11.' }
 $paths = Invoke-SnapshotRun -RepositoryRoot $PSScriptRoot @PSBoundParameters
-$paths.Evidence.Checks | Select-Object Name, Status | Format-Table -AutoSize | Out-Host
+Get-CheckSummary -Checks $paths.Evidence.Checks | Format-Table Name,CollectionStatus,ProbeOutcome,TimeoutScope -AutoSize -Wrap | Out-Host
 Write-Host "JSON evidence: $($paths.JsonPath)"
 Write-Host "HTML summary:  $($paths.HtmlPath)"
 $paths | Select-Object JsonPath,HtmlPath

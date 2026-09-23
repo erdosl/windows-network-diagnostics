@@ -54,6 +54,23 @@ function Get-DiagnosticFindings {
     [pscustomobject]@{ Observations = @($observations); Hypotheses = @($hypotheses | Select-Object -Unique) }
 }
 
+function Get-CheckSummary {
+    param([object[]]$Checks)
+    foreach ($check in $Checks) {
+        $probes = @($check.Data | Where-Object { $null -ne $_.Outcome })
+        if ($probes.Count -gt 0) {
+            foreach ($probe in $probes) {
+                [pscustomobject]@{ Name = $check.Name; CollectionStatus = $check.Status
+                    ProbeOutcome = $probe.Outcome; TimeoutScope = $probe.TimeoutScope }
+            }
+        } else {
+            [pscustomobject]@{ Name = $check.Name; CollectionStatus = $check.Status
+                ProbeOutcome = $(if ($check.Name -like 'Connectivity:*') { 'Unknown (no completed result)' } else { 'Not applicable' })
+                TimeoutScope = $(if ($check.Status -eq 'TimedOut') { 'Worker' } else { $null }) }
+        }
+    }
+}
+
 function Write-DiagnosticReport {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][string]$OutputDirectory)
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force -ErrorAction Stop
@@ -87,6 +104,15 @@ function Write-DiagnosticReport {
         }
         $null = $html.Append('</table>')
     }
+    $null = $html.Append('<h2>Check summary</h2><p>CollectionStatus describes evidence collection. ProbeOutcome describes the network operation; successful collection does not mean connectivity worked. Worker timeout leaves the probe outcome unknown.</p><table><tr><th>Check</th><th>CollectionStatus</th><th>ProbeOutcome</th><th>TimeoutScope</th></tr>')
+    foreach ($row in @(Get-CheckSummary -Checks $Evidence.Checks)) {
+        $null = $html.Append('<tr>')
+        foreach ($field in @('Name','CollectionStatus','ProbeOutcome','TimeoutScope')) {
+            $null = $html.Append('<td>' + (& $encode $row.$field) + '</td>')
+        }
+        $null = $html.Append('</tr>')
+    }
+    $null = $html.Append('</table>')
     $null = $html.Append('<h2>Checks and raw evidence</h2>')
     foreach ($check in $Evidence.Checks) {
         $null = $html.Append('<h3>' + (& $encode $check.Name) + ': ' + (& $encode $check.Status) + '</h3><pre>')

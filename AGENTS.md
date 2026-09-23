@@ -37,3 +37,9 @@
   actual Windows version, privileges, commands, test results, and unverified coverage.
 - Defer monitoring, subnet scanning, Nmap, vendor lookup, and packet capture.
 - Do not commit or push unless explicitly requested by the user.
+
+- Preserve the cleaned noreply-email Git history; never reintroduce original commits.
+- Display collection status separately from probe outcome. Worker timeouts leave
+  network outcome unknown; ordinary probe failures/timeouts can be collected successfully.
+- Use one elapsed-time budget across TCP/TLS/HTTP, plus a separate bounded worker
+  overhead allowance. Preserve completed stage evidence on cooperative timeouts.

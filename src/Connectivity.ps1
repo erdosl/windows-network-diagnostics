@@ -1,3 +1,60 @@
+function Get-ProbeRemainingMilliseconds {
+    param([Diagnostics.Stopwatch]$Watch, [int]$TimeoutMs, [string]$Stage)
+    $remaining = $TimeoutMs - $Watch.ElapsedMilliseconds
+    if ($remaining -le 0) { throw [TimeoutException]::new("Probe budget exhausted during $Stage.") }
+    [int]$remaining
+}
+
+function Test-ProbeTimeoutException {
+    param([Exception]$Exception)
+    while ($null -ne $Exception) {
+        if ($Exception -is [TimeoutException] -or
+            ($Exception -is [Net.Sockets.SocketException] -and $Exception.SocketErrorCode -eq [Net.Sockets.SocketError]::TimedOut)) { return $true }
+        $Exception = $Exception.InnerException
+    }
+    $false
+}
+
+function Read-ProbeHttpStatus {
+    param($Stream, [Diagnostics.Stopwatch]$Watch, [int]$TimeoutMs)
+    $line = [Text.StringBuilder]::new()
+    while ($line.Length -lt 4096) {
+        $Stream.ReadTimeout = Get-ProbeRemainingMilliseconds $Watch $TimeoutMs 'HTTP response'
+        $next = $Stream.ReadByte()
+        if ($next -eq -1 -or $next -eq 10) { break }
+        if ($next -ne 13) { $null = $line.Append([char]$next) }
+    }
+    $line.ToString()
+}
+
+function Get-ProbeHttpOutcome {
+    param([string]$StatusLine)
+    if ($StatusLine -notmatch '^HTTP/1\.[01] ([0-9]{3})') { throw 'Invalid or missing HTTP response status line.' }
+    if ([int]$Matches[1] -ge 400) { 'HttpError' } else { 'Success' }
+}
+
+function New-ProbeTcpClient {
+    param([Net.Sockets.AddressFamily]$AddressFamily)
+    [Net.Sockets.TcpClient]::new($AddressFamily)
+}
+
+function New-ProbeTlsStream {
+    param($Stream)
+    [Net.Security.SslStream]::new($Stream, $false)
+}
+
+function Invoke-ProbeTlsHandshake {
+    param($Stream, [string]$HostName, [Diagnostics.Stopwatch]$Watch, [int]$TimeoutMs)
+    $null = Get-ProbeRemainingMilliseconds $Watch $TimeoutMs 'TLS negotiation'
+    $tls = $Stream.BeginAuthenticateAsClient($HostName, $null, $null)
+    try {
+        if (-not $tls.AsyncWaitHandle.WaitOne((Get-ProbeRemainingMilliseconds $Watch $TimeoutMs 'TLS negotiation'))) {
+            throw [TimeoutException]::new('TLS negotiation timed out.')
+        }
+        $Stream.EndAuthenticateAsClient($tls)
+    } finally { $tls.AsyncWaitHandle.Close() }
+}
+
 function Get-RoutePrediction {
     param([string]$Destination)
     # Find-NetRoute returns the selected source address and route as separate objects.
@@ -20,6 +77,7 @@ function Invoke-ConnectivityProbe {
     if ([Net.IPAddress]::TryParse($Destination, [ref]$parsed)) { $family = $parsed.AddressFamily.ToString() }
     $result = [ordered]@{ Kind = $Kind; Destination = $Destination; Port = $Port; AddressFamily = $family
         StartedAt = $start.ToString('o'); CompletedAt = $null; DurationMs = 0; Outcome = 'Failed'; Error = $null
+        ProbeTimeoutMs = $TimeoutMs; TimeoutScope = $null; CompletedStages = @()
         RoutePrediction = $null; RouteError = $null; ObservedConnection = $null; Evidence = $null }
     $client = $null
     $ssl = $null
@@ -28,9 +86,17 @@ function Invoke-ConnectivityProbe {
             try { $result.RoutePrediction = Get-RoutePrediction $Destination }
             catch { $result.RouteError = $_.Exception.Message }
         }
+        $null = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'route setup'
         switch ($Kind) {
             'Resolve' {
-                $addresses = @([Net.Dns]::GetHostAddresses($Destination) | ForEach-Object {
+                $resolution = [Net.Dns]::BeginGetHostAddresses($Destination, $null, $null)
+                try {
+                    if (-not $resolution.AsyncWaitHandle.WaitOne((Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'name resolution'))) {
+                        throw [TimeoutException]::new('Name resolution timed out.')
+                    }
+                    $resolvedAddresses = [Net.Dns]::EndGetHostAddresses($resolution)
+                } finally { $resolution.AsyncWaitHandle.Close() }
+                $addresses = @($resolvedAddresses | ForEach-Object {
                     [pscustomobject]@{ IPAddress = $_.ToString(); AddressFamily = $_.AddressFamily.ToString() }
                 })
                 $result.Evidence = $addresses
@@ -50,10 +116,11 @@ function Invoke-ConnectivityProbe {
                 if ($IncludeGatewayPing) {
                     $ping = [Net.NetworkInformation.Ping]::new()
                     try {
-                        $reply = $ping.Send($Destination, $TimeoutMs)
+                        $reply = $ping.Send($Destination, (Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'ICMP'))
                         $result.Evidence.ICMP = [pscustomobject]@{ Status = $reply.Status.ToString(); RoundtripMs = $reply.RoundtripTime
                             Attribution = 'OS-selected path; source interface not observed'; Note = 'No reply does not prove the gateway is unreachable.' }
-                        $result.Outcome = $reply.Status.ToString()
+                        $result.Outcome = $(if ($reply.Status -eq 'Success') { 'Success' } elseif ($reply.Status -eq 'TimedOut') { 'TimedOut' } else { 'Failed' })
+                        if ($result.Outcome -eq 'TimedOut') { $result.TimeoutScope = 'Probe' }
                     } finally { $ping.Dispose() }
                 }
             }
@@ -66,11 +133,12 @@ function Invoke-ConnectivityProbe {
             }
             { $_ -in @('TCP','HTTPS') } {
                 if ($null -eq $parsed) { throw 'TCP/HTTPS workers require a resolved literal IP address.' }
-                $client = [Net.Sockets.TcpClient]::new($parsed.AddressFamily)
+                $client = New-ProbeTcpClient $parsed.AddressFamily
                 $connect = $client.BeginConnect($parsed, $Port, $null, $null)
                 try {
-                    if (-not $connect.AsyncWaitHandle.WaitOne($TimeoutMs)) { throw [TimeoutException]::new('TCP connect timed out.') }
+                    if (-not $connect.AsyncWaitHandle.WaitOne((Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'TCP connect'))) { throw [TimeoutException]::new('TCP connect timed out.') }
                     $client.EndConnect($connect)
+                    $result.CompletedStages += 'TCP connect'
                 } finally { $connect.AsyncWaitHandle.Close() }
                 $local = $client.Client.LocalEndPoint
                 $matching = @()
@@ -89,35 +157,28 @@ function Invoke-ConnectivityProbe {
                     $result.Evidence = [pscustomobject]@{ Endpoint = $Endpoint; Method = 'HEAD'; HttpStatusLine = $null; TlsProtocol = $null
                         Proxy = 'Direct connection; system proxies and redirects are not used.' }
                     $stream = $client.GetStream()
-                    $stream.ReadTimeout = $TimeoutMs
-                    $stream.WriteTimeout = $TimeoutMs
-                    $ssl = [Net.Security.SslStream]::new($stream, $false)
+                    $stream.ReadTimeout = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'TLS setup'
+                    $stream.WriteTimeout = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'TLS setup'
+                    $ssl = New-ProbeTlsStream $stream
                     # Default certificate validation; no credentials, client certificate, cookies, or overrides.
-                    $tls = $ssl.BeginAuthenticateAsClient($uri.DnsSafeHost, $null, $null)
-                    try {
-                        if (-not $tls.AsyncWaitHandle.WaitOne($TimeoutMs)) { throw [TimeoutException]::new('TLS negotiation timed out.') }
-                        $ssl.EndAuthenticateAsClient($tls)
-                    } finally { $tls.AsyncWaitHandle.Close() }
-                    $ssl.ReadTimeout = $TimeoutMs
-                    $ssl.WriteTimeout = $TimeoutMs
+                    Invoke-ProbeTlsHandshake $ssl $uri.DnsSafeHost $watch $TimeoutMs
+                    $result.CompletedStages += 'TLS negotiation'
+                    $result.Evidence.TlsProtocol = $ssl.SslProtocol.ToString()
+                    $ssl.WriteTimeout = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'HTTP request'
                     $request = "HEAD $($uri.PathAndQuery) HTTP/1.1`r`nHost: $($uri.Authority)`r`nConnection: close`r`n`r`n"
                     $bytes = [Text.Encoding]::ASCII.GetBytes($request)
                     $ssl.Write($bytes, 0, $bytes.Length)
-                    $line = [Text.StringBuilder]::new()
-                    while ($line.Length -lt 4096) {
-                        $next = $ssl.ReadByte()
-                        if ($next -eq -1 -or $next -eq 10) { break }
-                        if ($next -ne 13) { $null = $line.Append([char]$next) }
-                    }
-                    $result.Evidence.HttpStatusLine = $line.ToString()
-                    $result.Evidence.TlsProtocol = $ssl.SslProtocol.ToString()
-                    if ($line.ToString() -notmatch '^HTTP/1\.[01] ([0-9]{3})') { throw 'Invalid or missing HTTP response status line.' }
-                    if ([int]$Matches[1] -ge 400) { $result.Outcome = 'HttpError' }
+                    $result.CompletedStages += 'HTTP request'
+                    $result.Evidence.HttpStatusLine = Read-ProbeHttpStatus $ssl $watch $TimeoutMs
+                    $result.Outcome = Get-ProbeHttpOutcome $result.Evidence.HttpStatusLine
+                    $result.CompletedStages += 'HTTP response'
                 }
             }
         }
+        $null = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'probe completion'
     } catch {
-        $result.Outcome = $(if ($_.Exception -is [TimeoutException]) { 'TimedOut' } else { 'Failed' })
+        $result.Outcome = $(if ((Test-ProbeTimeoutException $_.Exception) -or $watch.ElapsedMilliseconds -ge $TimeoutMs) { 'TimedOut' } else { 'Failed' })
+        if ($result.Outcome -eq 'TimedOut') { $result.TimeoutScope = 'Probe' }
         $result.Error = [pscustomobject]@{ Message = $_.Exception.Message; Id = $_.FullyQualifiedErrorId; Category = [string]$_.CategoryInfo.Category }
     } finally {
         if ($null -ne $ssl) { $ssl.Dispose() }
@@ -131,6 +192,8 @@ function Invoke-ConnectivityProbe {
 
 function New-ProbeDefinition {
     param([string]$Name, [hashtable]$Arguments, [int]$TimeoutSeconds)
+    # TimeoutSeconds here is the internal probe budget, not the worker deadline.
+    if (-not $Arguments.ContainsKey('TimeoutMs')) { $Arguments.TimeoutMs = $TimeoutSeconds * 1000 }
     [pscustomobject]@{ Name = $Name; FunctionName = 'Invoke-ConnectivityProbe'; Arguments = $Arguments; TimeoutSeconds = $TimeoutSeconds }
 }
 

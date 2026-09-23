@@ -1,4 +1,141 @@
-# Milestone 2 validation
+# Probe review validation (0.2.1, schema 3)
+
+Date: 2026-09-23. Windows 10 Pro 22H2, build 19045.7725;
+Windows PowerShell 5.1.19041.7725; non-elevated agent sandbox. Effective and
+CurrentUser policy: RemoteSigned; MachinePolicy, UserPolicy, Process and
+LocalMachine: Undefined. No policy changes, bypass flags, dependencies, network
+configuration changes, or external active probes were used. The existing cleaned
+Git history remains unchanged; nothing was committed or pushed.
+
+## Latest user-run opt-in validation: passed
+
+The user supplied a normal-terminal collector transcript on 2026-09-23 with
+`$LASTEXITCODE` **0**. The agent independently read the saved JSON: schema 3,
+collector 0.2.1, PowerShell 5.1.19041.7725, CollectionStatus Complete, populated
+start/end timestamps, **IsElevated=True**, and 37 completed check records.
+Connectivity was enabled; gateway ping was disabled. Recorded budgets were
+10 seconds per probe, 15 seconds additional worker overhead, and 30 seconds per
+passive check. This was user-run validation, not an agent-run external probe.
+
+Collection statuses: **36 Success, one Unavailable**. Network outcomes were
+separate: six server-specific DNS queries failed, six DNS queries succeeded,
+TCP succeeded, both IPv4 HTTPS probes succeeded, and gateway neighbour evidence
+was Observed without ICMP. The TCP/HTTPS records retain observed socket endpoints;
+both HTTPS records retain all four completed stages. No worker or probe timeout
+was reported. Failed DNS queries do not establish a DNS root cause or contradict
+successful queries against other configured servers.
+
+The HTML exists and both generated report files are ignored by Git. No diagnostic
+identifiers or raw report contents were copied into tracked documentation. This
+run validates actual opt-in collection and report persistence in the user's
+elevated Windows 10 terminal. It does not validate Windows 11, IPv6 connectivity
+success, real failure/timeout paths, or establish that an intermittent fault is
+resolved. The test suites were not included in this transcript; their sandbox
+results below remain unchanged.
+
+## Agent sandbox results
+
+All commands below used normal `.ps1` file execution from the repository directory:
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1` | 0 | 42 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1` | 1 | Atomic checkpoint `File.Replace` denied; full suite unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-Probes.ps1` | 1 | Real TLS initialization failed before expected timeout; full suite unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1` | 0 | 23 assertions passed |
+| `powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -LookbackHours 1 -MaxEventsPerLog 10 -MaxNicEvents 8 -MaxPowerEvents 5 -CheckTimeoutSeconds 20` | 1 | Atomic checkpoint replacement denied; not an end-to-end pass |
+| `powershell.exe -NoProfile -File .\output\Validate-ReviewSyntax.ps1` | 0 | All 16 source/test/fixture/entry-point PowerShell files parsed with the 5.1 AST parser |
+
+The syntax harness is a generated local artifact under ignored output/. It is not
+an inline replacement for entry-point execution. Tests dot-source the actual source
+files normally; real workers execute via `powershell.exe -NoProfile -NonInteractive
+-File`. No out-of-sandbox rerun was used for these results.
+
+The checkpoint error remains:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12 char:49
+CategoryInfo: NotSpecified: (:) [], ParentContainsErrorRecordException
+FullyQualifiedErrorId: UnauthorizedAccessException
+```
+
+The original probe suite's unchanged assertion fails with:
+
+```text
+Assertion failed: HTTPS TLS timeout retained (actual outcome: Failed; error:
+Exception calling "BeginAuthenticateAsClient" with "3" argument(s):
+"No credentials are available in the security package")
+At tests/Test-Probes.ps1:8 char:28
+```
+
+That is a TLS initialization restriction, not a request to collect credentials.
+The assertion was not weakened. Historical user-run passes below apply to 0.2.0,
+not this edited version.
+
+## New regression coverage
+
+The 23 passing review assertions cover failed DNS, deterministic refused TCP,
+TLS validation failure and HTTP 503 with successful evidence collection; preserved
+TCP endpoints/TLS stages on ordinary deadline expiry; one shared budget across
+stages and slow status-line reads; separate worker/probe timeout summaries; HTML
+encoding of every new summary field; and absence of invented diagnoses.
+
+The suite uses real loopback TCP sockets with mocked TLS/HTTP, plus real isolated
+workers to verify ordinary probe timeout evidence, hard worker timeout, process
+exit, scratch cleanup and continuation. Worker fixtures expire before any external
+connection. Mocked orchestration verifies a 2-second probe plus 10-second worker
+overhead remains independent of a 1-second passive-check budget. Its report writer
+is mocked only for that scheduling test; it does not validate atomic replacement.
+HTML generation itself uses the real report writer in a new directory.
+
+## Manual validation from a normal Windows PowerShell terminal
+
+Run from the repository directory, without changing policy. Check each exit code:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Probes.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1
+$LASTEXITCODE
+```
+
+The following is explicitly opt-in and sends external traffic: TCP to 1.1.1.1:443,
+A/AAAA queries for example.com against configured DNS servers, and direct HTTPS
+HEAD to example.com (each resolved family separately). It inspects configured
+gateway neighbours without pinging them:
+
+```powershell
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -IncludeConnectivityTests -TcpDestinations 1.1.1.1 -TcpPort 443 -DnsQueryName example.com -HttpsEndpoint https://example.com/ -ProbeTimeoutSeconds 10 -ProbeWorkerOverheadSeconds 15 -CheckTimeoutSeconds 30
+$LASTEXITCODE
+```
+
+Add `-IncludeGatewayPing` to that command only if you also want gateway ICMP.
+Open the printed summary.html path. Check CollectionStatus and ProbeOutcome
+separately. A zero process exit means the snapshot completed, not that the network
+tests succeeded. Raw JSON retains Status/Outcome, errors, completed stages and
+observed endpoints. Do not share unredacted diagnostic artifacts.
+
+## Current limitations
+
+No Windows 11 validation or successful IPv6 connectivity validation.
+The user-run opt-in snapshot now validates real DNS/TCP/TLS/HTTPS success and
+report persistence on Windows 10. The full milestone test suite and original
+real TLS timeout suite still need normal-terminal validation of these edits. Earlier different-working-directory
+and path-with-spaces entry-point passes below were not repeated for 0.2.1.
+Synchronous Windows provider calls (including server-specific Resolve-DnsName)
+may not return within the cooperative probe budget; the independent hard worker
+deadline remains their ultimate bound. A killed worker cannot supply partial
+in-memory evidence and does not establish a network timeout. Extremely slow
+startup or result writing can also exhaust the finite worker overhead allowance.
+
+---
+
+# Historical milestone 2 validation
 
 Validation date: 2026-09-23. Environment: **Windows 10 Pro 22H2, build
 19045.7725**, **Windows PowerShell 5.1.19041.7725**. Agent-run validations were

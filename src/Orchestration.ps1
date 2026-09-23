@@ -11,6 +11,7 @@ function Invoke-SnapshotRun {
         [ValidateRange(1,65535)][int]$TcpPort = 443,
         [string]$DnsQueryName = 'example.com', [string]$HttpsEndpoint = 'https://example.com/',
         [ValidateRange(1,60)][int]$ProbeTimeoutSeconds = 10,
+        [ValidateRange(5,120)][int]$ProbeWorkerOverheadSeconds = 15,
         # Injection seams are for dependency-free orchestration tests, never CLI options.
         [scriptblock]$CheckExecutor, [scriptblock]$CheckpointObserver)
     if ($IncludeGatewayPing -and -not $IncludeConnectivityTests) { throw 'IncludeGatewayPing requires IncludeConnectivityTests.' }
@@ -24,7 +25,7 @@ function Invoke-SnapshotRun {
     $computer = $identity.ComputerName -replace '[^A-Za-z0-9_.-]', '_'
     $directory = Join-Path (Join-Path $RepositoryRoot 'output') ("snapshot-$computer-$($identity.RunId)")
     $null = New-Item -Path $directory -ItemType Directory -ErrorAction Stop
-    $evidence = [pscustomobject]@{ SchemaVersion = 2; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    $evidence = [pscustomobject]@{ SchemaVersion = 3; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()
@@ -33,7 +34,7 @@ function Invoke-SnapshotRun {
             MaxNicEvents = $MaxNicEvents; MaxPowerEvents = $MaxPowerEvents; CheckTimeoutSeconds = $CheckTimeoutSeconds
             IncludeConnectivityTests = [bool]$IncludeConnectivityTests; IncludeGatewayPing = [bool]$IncludeGatewayPing
             TcpDestinations = $TcpDestinations; TcpPort = $TcpPort; DnsQueryName = $DnsQueryName
-            HttpsEndpoint = $HttpsEndpoint; ProbeTimeoutSeconds = $ProbeTimeoutSeconds }
+            HttpsEndpoint = $HttpsEndpoint; ProbeTimeoutSeconds = $ProbeTimeoutSeconds; ProbeWorkerOverheadSeconds = $ProbeWorkerOverheadSeconds }
         Checks = @(); Findings = Get-DiagnosticFindings @(); CollectionError = $null }
     $source = Join-Path $RepositoryRoot 'src'
     # This closure runs only in the parent. All worker inputs are serialized explicitly.
@@ -49,7 +50,9 @@ function Invoke-SnapshotRun {
         $evidence.PendingCheck = $definition.Name
         & $save
         $timeout = $CheckTimeoutSeconds
-        if ($definition.TimeoutSeconds) { $timeout = [Math]::Min($timeout, [int]$definition.TimeoutSeconds) }
+        if ($definition.FunctionName -eq 'Invoke-ConnectivityProbe') {
+            $timeout = $ProbeTimeoutSeconds + $ProbeWorkerOverheadSeconds
+        } elseif ($definition.TimeoutSeconds) { $timeout = [Math]::Min($timeout, [int]$definition.TimeoutSeconds) }
         if ($null -ne $CheckExecutor) { $result = & $CheckExecutor $definition $timeout $directory }
         else { $result = Invoke-BoundedCheck -Definition $definition -SourceDirectory $source -WorkingDirectory $directory -TimeoutSeconds $timeout }
         $evidence.Checks += $result

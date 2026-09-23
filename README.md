@@ -1,6 +1,6 @@
 # Windows network diagnostics
 
-Milestone 2 (`0.2.0`) collects bounded Windows 10/11 network snapshots for
+Milestone 2 review update (`0.2.1`) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -74,15 +74,30 @@ status line is collected (bounded to 4096 characters).
 | `TcpPort` | 443 | 1-65535 |
 | `DnsQueryName` | example.com | A and AAAA queried independently |
 | `HttpsEndpoint` | https://example.com/ | HTTPS endpoint without credentials/query/fragment |
-| `ProbeTimeoutSeconds` | 10 | 1-60; active-check deadline, capped by check timeout |
+| `ProbeTimeoutSeconds` | 10 | 1-60; shared elapsed-time probe budget, starting inside the worker |
+| `ProbeWorkerOverheadSeconds` | 15 | 5-120; additional worker startup/setup/result-writing allowance |
 
 Each check runs in a fresh `powershell.exe -NoProfile -NonInteractive -File`
 worker, with explicit serialized inputs. A Windows Job Object owns the worker
 and descendants, including native commands. Deadline or parent termination kills
 the process tree. Workers write only private scratch results; only the parent
 writes evidence/HTML. Cleanup can add up to five seconds beyond a check deadline.
-Worker startup, provider initialization, and source selection consume the same
-budget as the probe. Socket stage timeouts do not extend the outer deadline.
+Passive checks use `CheckTimeoutSeconds`. Active checks use an independent hard
+worker budget of `ProbeTimeoutSeconds + ProbeWorkerOverheadSeconds` (25 seconds
+by default), not capped by the passive check timeout. The additional allowance
+leaves bounded time for process startup, imports and result serialization. It is
+not extra network-operation time. An unusually slow startup or blocked provider
+can still exhaust the hard worker deadline.
+
+The probe stopwatch starts inside the loaded worker. Route/source lookup and all
+network stages consume that one budget. TCP connect, TLS negotiation, HTTP request
+writing and every status-line read use only the remaining milliseconds. Slow HTTP
+bytes cannot renew the deadline. Hostname resolution is awaited with the remaining
+budget. Synchronous Windows route/neighbour/interface and `Resolve-DnsName`
+providers cannot always be interrupted cooperatively: the elapsed budget is
+checked when they return, and the hard worker kill remains the fallback if they
+stall. DNS uses Windows' `-QuickTimeout`; its OS timeout can differ from the probe
+budget. A hard worker timeout is not evidence of a network timeout.
 There is no total snapshot deadline; checks are sequential, not simultaneous.
 
 ## Evidence and reports
@@ -100,7 +115,7 @@ by index, retains all addresses and default routes, shows family-specific metric
 and reports unavailable sources. It does not choose an "active gateway" from
 configuration. Raw check evidence remains below the summaries and in JSON.
 
-Schema **2** adds `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
+Schema **3** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
 `StartedAt`/`CompletedAt` with offsets, `CollectionStatus`, `Revision`, `PendingCheck`,
 `PlannedChecks`, `Parameters`, and `CollectionError`. `CollectedAt` remains an alias
 for start time. Parameters formerly at the root now live under `Parameters`.
@@ -119,8 +134,20 @@ show an older incomplete state. A hard interruption leaves the last checkpoint
 
 `Complete` means all scheduled checks were attempted, not that they succeeded.
 Statuses are `Success`, `Failed`, `Unavailable`, `PermissionDenied`, `TimedOut`,
-and `Skipped`. A successful probe worker can contain a failed network `Outcome`:
-check status describes execution, while `Data[].Outcome` describes the test.
+and `Skipped`. The console and HTML check summary show **CollectionStatus** (the raw check's
+`Status`) separately from **ProbeOutcome** (each raw `Data[].Outcome`). For example,
+`CollectionStatus=Success, ProbeOutcome=Failed` means the failed test was recorded
+successfully; it does not mean connectivity worked. `HttpError` preserves HTTP
+error responses separately from TCP/TLS failures. Gateway `Observed` means only
+neighbour evidence was inspected, without ICMP.
+
+Schema 3 adds `Parameters.ProbeWorkerOverheadSeconds`, per-check `TimeoutScope`
+(`Worker` for forced termination), and per-probe `ProbeTimeoutMs`, `TimeoutScope`
+(`Probe` for ordinary budget/network timeouts) and `CompletedStages`. Existing raw
+`Status`, `Outcome`, errors, endpoints and evidence remain available. A normal
+probe timeout can have collection status `Success` and retains completed TCP/TLS
+stages and observed endpoints. A worker timeout instead shows collection status
+`TimedOut`, probe outcome `Unknown (no completed result)`, and scope `Worker`.
 A killed probe retains destination/options in `Request`; unfinished worker data
 is not presented as completed evidence. Report-write errors fail the command.
 
@@ -169,6 +196,7 @@ Run these actual files using Windows PowerShell 5.1:
 powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1
 powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
 powershell.exe -NoProfile -File .\tests\Test-Probes.ps1
+powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1
 ```
 
 They are dependency-free. Tests use synthetic data/mocked collectors, real local
