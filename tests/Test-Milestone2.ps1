@@ -70,17 +70,17 @@ $observer = { param($evidence, $directory)
     $script:checkpoints += [pscustomobject]@{ Status = $saved.CollectionStatus; Count = $saved.Checks.Count; End = $saved.CompletedAt }
 }
 $run = Invoke-SnapshotRun -TestOutputRoot (Join-Path $root 'output\tests\orchestration') -RepositoryRoot $root -CheckExecutor $mock -CheckpointObserver $observer
-Assert-Condition ($run.Evidence.SchemaVersion -eq 4 -and $run.Evidence.CollectionStatus -eq 'Complete') 'Versioned completed snapshot'
+Assert-Condition ($run.Evidence.SchemaVersion -eq 6 -and $run.Evidence.CollectionStatus -eq 'Complete') 'Versioned completed snapshot'
 Assert-Condition ($run.Evidence.ComputerName -eq [Environment]::MachineName) 'Computer identity'
 $id = [guid]::Empty
 Assert-Condition ([guid]::TryParse($run.Evidence.RunId, [ref]$id)) 'Unique RunId is a GUID'
 Assert-Condition ($run.JsonPath.Contains($run.Evidence.RunId) -and $run.JsonPath.Contains($run.Evidence.ComputerName)) 'Output path includes run and computer'
-Assert-Condition ($run.Evidence.CollectorVersion -eq '0.2.2' -and $run.Evidence.IsElevated -is [bool]) 'Version and process elevation'
+Assert-Condition ($run.Evidence.CollectorVersion -eq '0.3.1' -and $run.Evidence.IsElevated -is [bool]) 'Version and process elevation'
 Assert-Condition ($run.Evidence.StartedAt -match '[+-]\d\d:\d\d$' -and $run.Evidence.CompletedAt -match '[+-]\d\d:\d\d$') 'Collection timestamps retain UTC offsets'
 Assert-Condition ($script:checkpoints[0].Status -eq 'Incomplete' -and $script:checkpoints[0].Count -eq 0) 'Checkpoint exists before first check'
 Assert-Condition (@($script:checkpoints | Where-Object { $_.Status -eq 'Incomplete' -and $_.Count -gt 0 }).Count -gt 0) 'Completed checks saved incrementally'
 Assert-Condition (@($script:executed | Where-Object FunctionName -eq 'Invoke-ConnectivityProbe').Count -eq 0) 'No active operations by default'
-Assert-Condition ($run.Evidence.Checks[0].Status -eq 'TimedOut' -and $run.Evidence.Checks.Count -eq 20) 'Full orchestration continues after timeout'
+Assert-Condition ($run.Evidence.Checks[0].Status -eq 'TimedOut' -and $run.Evidence.Checks.Count -eq 22) 'Full orchestration continues after timeout'
 $summary = @(Get-InterfaceSummary $run.Evidence.Checks)
 Assert-Condition ($summary.Count -eq 1 -and $summary[0].Addresses.Count -eq 2 -and $summary[0].DefaultRoutes.Count -eq 2) 'Correlates multiple addresses and routes'
 Assert-Condition ($summary[0].DefaultRoutes[0].InterfaceMetrics[0].InterfaceMetric -eq 25) 'Metrics joined by interface and family'

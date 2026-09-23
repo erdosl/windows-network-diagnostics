@@ -51,3 +51,19 @@
   retain original errors and separate DNS/probe timeouts from worker termination.
 - Put new synthetic orchestration snapshots and recovery fixtures under output/tests/.
   Do not alter or delete existing user diagnostic reports.
+
+- Logical maps derive only from snapshot evidence, with per-node/relationship
+  provenance, intervals, evidence type and plain-language limitations. Never invent
+  physical infrastructure or merge remote endpoints with gateway/MAC identities.
+- Retain neighbour states/raw values and interface/scope context. Filter only
+  endpoint-observation counts; do not describe them as verified physical devices.
+- Collect adapter statistics/power settings in independent bounded per-adapter
+  checks. Counters are cumulative samples, not rates/current-fault diagnoses.
+
+- Adapter-provider missing-object classification must be scoped to structured
+  provider errors after correct literal/hidden targeting. Distinguish generated
+  no-match records (no native exception) from thrown provider errors; preserve the latter
+  and identity; unavailable does not prove hardware fault or lack of support.
+- APIPA findings retain every address and interface context. Prioritize active
+  physical links, preserve missing sources/raw enums, and keep DHCP possibilities
+  separate from observations. Never infer host-only purpose from adapter names.

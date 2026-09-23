@@ -1,6 +1,6 @@
 # Windows network diagnostics
 
-Milestone 2 review update (`0.2.2`) collects bounded Windows 10/11 network snapshots for
+Milestone 3 (`0.3.1`) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -26,6 +26,73 @@ If policy blocks scripts or organizational controls block native compilation,
 use your approved execution/signing process. Never bypass execution restrictions.
 The collector never changes execution policy, adapters, network settings, leases,
 or event-log configuration, and never exports Wi-Fi keys or requests credentials.
+
+## Passive logical network map
+
+Every checkpoint includes a logical model derived only from completed successful
+snapshot checks. It shows the collecting computer, interface-scoped addresses and
+prefix-derived subnets, candidate routes/default gateways, neighbour-cache
+observations, and any existing probe route predictions/socket endpoints. It adds
+no network discovery traffic. This is **not a physical wiring diagram**. Switches,
+ports, cables and access-point paths remain unknown. Localized Wi-Fi output stays
+raw; structured association is explicitly unavailable rather than guessed.
+
+HTML groups interface/subnet/gateway evidence and provides collapsible neighbour
+lists grouped by interface, with source references, collection intervals and
+plain-language limitations. The console gives interface/subnet and neighbour
+observation counts plus coverage gaps. Counts are not verified physical devices.
+Same IPs or MACs on different interfaces are never merged into devices; IPv6 zones
+and overlapping interface prefixes stay separate. Repeated observations can have
+several explanations (including proxying or conflicts); no duplicate-IP fault is
+inferred. Configured routes do not prove reachability or active route selection,
+and even a Reachable cache state is only a historical snapshot.
+
+The endpoint-observation count excludes multicast, limited IPv4 broadcast,
+directed broadcast derived from known same-interface address prefixes, invalid or
+unspecified IPs, and missing/zero/multicast/non-Ethernet MAC values. /31 and /32 do
+not imply broadcast endpoints. All observations remain in JSON/raw evidence.
+MAC eligibility is conservative, not a device identity or a reachability test.
+Remote socket destinations are never identified using a gateway's MAC.
+
+Two new passive check families run separately **for each inventoried adapter**:
+`AdapterStatistics:<index>` and `AdapterPowerManagement:<index>`. Each has its
+own `CheckTimeoutSeconds` worker budget, explicit name/index/GUID arguments,
+request/error evidence and timestamps. Supported provider properties are retained
+in `Data[].Fields`; CIM/PowerShell transport metadata is excluded. A failed or
+unsupported adapter does not discard other adapters' data. If adapter inventory
+is unavailable/empty, both families are marked unavailable. Total run time grows
+with adapter count because collection remains sequential. Adapters can change
+between inventory and name-based provider reads; identity is not an atomic view.
+Counters are cumulative samples, not rates or evidence of a current fault; power
+settings are read only and never changed.
+
+Provider references: [adapter statistics](https://learn.microsoft.com/en-us/powershell/module/netadapter/get-netadapterstatistics),
+[power management](https://learn.microsoft.com/en-us/powershell/module/netadapter/get-netadapterpowermanagement),
+[neighbour states](https://learn.microsoft.com/en-us/windows/win32/fwp/wmi/nettcpipprov/msft-netneighbor).
+
+### Logical model schema
+
+Evidence schema 5 added `LogicalNetwork` with `ModelVersion=1`, `View`, `Nodes`,
+`Relationships`, `Coverage`, `Counts` and `Filtering`; original checks remain intact.
+Nodes contain `Id`, `Kind`, `InterfaceIndex`, `Label`, `Data` and `Support`.
+Relationships contain `Id`, `From`, `To`, `Kind` and `Support`. Every support record
+has `CheckName`, `EvidenceReference` (JSON-pointer-style path into this evidence),
+`StartedAt`, `CompletedAt`, `EvidenceType` (configured/observed/predicted/inferred)
+and `Limitation`. `SnapshotIdentity` denotes collection metadata, using
+`/ComputerName`, rather than a separate worker check. Missing historical timestamps
+remain null; current checks use their collection interval, not an invented time.
+
+Node IDs are deterministic within the same snapshot: interface index IDs,
+interface/prefix/zone subnet IDs, and check/data-index observation IDs. They are
+not cross-run device identities. Subnets derive from address prefixes and do not
+establish a physical segment. Multiple supports are retained for shared prefixes. Gateways from adapter
+configuration remain available even without route data; separate gateway nodes
+can reflect duplicate configuration evidence, not additional devices.
+Neighbour data includes `StateRaw`, readable `StateLabel` (unknown values explicit),
+`Eligibility` and `IncludedInEndpointObservationCount`. All enum/provider values
+remain in raw checks. Coverage reports missing/failed/unavailable checks plus
+unknown Layer 2 and unavailable structured Wi-Fi relationships. Model generation
+is repeated at each saved checkpoint; incomplete snapshot limitations still apply.
 
 ## Opt-in connectivity tests
 
@@ -170,7 +237,7 @@ by index, retains all addresses and default routes, shows family-specific metric
 and reports unavailable sources. It does not choose an "active gateway" from
 configuration. Raw check evidence remains below the summaries and in JSON.
 
-Schema **4** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
+Schema **6** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
 `StartedAt`/`CompletedAt` with offsets, `CollectionStatus`, `Revision`, `PendingCheck`,
 `PlannedChecks`, `Parameters`, and `CollectionError`. `CollectedAt` remains an alias
 for start time. Parameters formerly at the root now live under `Parameters`.
@@ -254,6 +321,7 @@ powershell.exe -NoProfile -File .\tests\Test-Probes.ps1
 powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1
 powershell.exe -NoProfile -File .\tests\Test-Dns.ps1
 powershell.exe -NoProfile -File .\tests\Test-Presentation.ps1
+powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1
 ```
 
 They are dependency-free. Tests use synthetic data/mocked collectors, real local
@@ -279,3 +347,44 @@ not bypassed. Atomic file replacement requires a filesystem that supports it.
 
 Continuous monitoring, subnet scanning, Nmap, vendor lookup, packet capture, and
 Eero/UniFi integrations are out of scope. See [LICENSE](LICENSE).
+
+## Adapter availability and APIPA context (0.3.1 / schema 6)
+
+Adapter providers are queried with `-Name '*' -IncludeHidden`, then selected by
+ordinal case-insensitive literal name. Wildcard characters in an adapter alias do
+not become query patterns. Returned index/GUID fields, where present, must match
+the inventoried identity; mismatches are Failed, not classified as absent hardware.
+This replaces escaped name-pattern targeting. Provider enumeration remains bounded
+per adapter, but can cost more on hosts with many adapters. Missing returned
+identity fields and adapters changing during collection limit attribution.
+
+Only the adapter-provider call path recognizes ObjectNotFound with the exact
+provider-specific CmdletizationQuery_NotFound_Name ID (or an empty literal match)
+as Unavailable: "No matching adapter-provider object was returned." When inventory
+enumeration succeeds but literal matching finds no object, the collector generates
+an ErrorRecord with ID `AdapterProviderObjectMissing` and category ObjectNotFound;
+there is no native provider exception to preserve. When a provider command throws,
+its original message, ID, category and exception type are retained alongside the
+classification and any Error.Explanation. Error.AdapterIdentity retains the request
+identity in both cases. This is not a declaration of faulty or unsupported hardware.
+PermissionDenied, unexpected Failed and worker TimedOut remain distinct. Unrelated
+ObjectNotFound errors are not changed. Console, HTML and map coverage use the same
+check status; previously generated reports are not relabelled.
+
+Schema 6 adds Findings.ApipaDetails while retaining Observations/Hypotheses as
+string arrays for existing consumers. Every APIPA address has interface identity,
+adapter description/kind, link and IPv4 connection state, raw address state/origins,
+configured-default-route status, source availability, evidence references and
+collection timestamps. Unknown enum values remain explicit and raw values are
+retained. Active physical APIPA is ordered first; disconnected contexts last.
+Virtual classification uses HardwareInterface, never name substrings. Virtual
+APIPA is not automatically harmless. Disconnected retained configuration does not
+establish a current internet-path fault. Automatic origin plus enabled DHCP makes
+a missing usable lease only a possibility. A configured route is not proof of
+connectivity. Source timestamps remain absent if the original check lacks them.
+
+Focused regression command:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-AdapterApipa.ps1
+```

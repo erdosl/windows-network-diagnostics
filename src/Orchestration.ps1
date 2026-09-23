@@ -27,7 +27,7 @@ function Invoke-SnapshotRun {
     $outputRoot = $(if ($TestOutputRoot) { $TestOutputRoot } else { Join-Path $RepositoryRoot 'output' })
     $directory = Join-Path $outputRoot ("snapshot-$computer-$($identity.RunId)")
     $null = New-Item -Path $directory -ItemType Directory -ErrorAction Stop
-    $evidence = [pscustomobject]@{ SchemaVersion = 4; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    $evidence = [pscustomobject]@{ SchemaVersion = 6; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()
@@ -71,6 +71,15 @@ function Invoke-SnapshotRun {
         foreach ($name in @('Windows','TimeZone','Adapters','NICDrivers','IPAddresses','DHCPAndGateways','DNSServers',
             'InterfacesAndMetrics','Routes','Neighbours','WiFiConnection','NICServices')) {
             & $execute ([pscustomobject]@{ Name = $name; FunctionName = 'Invoke-SnapshotCollector'; Arguments = @{ Name = $name } })
+        }
+        $adapterInventory = @($evidence.Checks | Where-Object { $_.Name -eq 'Adapters' -and $_.Status -eq 'Success' } | ForEach-Object { $_.Data })
+        foreach ($kind in @('AdapterStatistics','AdapterPowerManagement')) {
+            if (-not $adapterInventory.Count) {
+                $evidence.Checks += [pscustomobject]@{Name=$kind;Status='Unavailable';Data=@();Error=[pscustomobject]@{Message='Adapter inventory unavailable or empty; no adapter detail checks scheduled.'}}
+            }
+            foreach ($adapter in $adapterInventory) {
+                & $execute ([pscustomobject]@{Name=($kind+':'+$adapter.InterfaceIndex);FunctionName='Invoke-AdapterDetail';Arguments=@{Kind=$kind;AdapterName=[string]$adapter.Name;InterfaceIndex=[int]$adapter.InterfaceIndex;InterfaceGuid=[string]$adapter.InterfaceGuid}})
+            }
         }
         $end = [DateTimeOffset]::Parse($identity.StartedAt).LocalDateTime
         $services = @($evidence.Checks | Where-Object { $_.Name -eq 'NICServices' -and $_.Status -eq 'Success' } |

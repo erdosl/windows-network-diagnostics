@@ -1,3 +1,257 @@
+# Pre-commit documentation review
+
+2026-09-23: clarified generated no-match records versus original provider errors.
+The agent reran `powershell.exe -NoProfile -File .\tests\Test-AdapterApipa.ps1`
+from the repository directory using normal script execution: **26 assertions
+passed, exit 0**. This focused rerun is separate from the user-run results below;
+unrelated suites were not rerun. Existing sandbox limitations remain applicable.
+
+# User-run validation of 0.3.1 / schema 6
+
+The user supplied a normal Windows PowerShell transcript: Test-AdapterApipa.ps1
+passed **26 assertions**, exit **0**; the default passive collector returned
+exit **0**. The agent independently read the saved evidence and verified collector
+**0.3.1**, schema **6**, CollectionStatus **Complete**, PowerShell
+**5.1.19041.7725**, **IsElevated=False**, and active connectivity tests disabled.
+
+The 72 checks contain **31 Success, 40 Unavailable and one Skipped**, with no
+Failed or TimedOut records. All **39 missing adapter-provider checks** now report
+Unavailable, retain adapter identity, and carry the explanation "No matching
+adapter-provider object was returned." All 39 agree with logical-map coverage.
+For successful inventory enumeration with no literal match, the explanation and
+AdapterProviderObjectMissing record are collector-generated; no native provider
+exception exists. Thrown provider errors instead retain their original message,
+ID, category and exception type alongside any explanation/classification.
+The remaining unavailable check is the DHCP Operational log; connectivity is
+skipped. This validates live targeting and classification on this host, not a
+claim that missing objects establish faulty or unsupported hardware.
+
+All **five APIPA addresses** remain represented with evidence references and
+collection timestamps: one on an up virtual/software adapter and four on
+disconnected adapters (one physical, three virtual/software). None is attributed
+to an active physical interface. The up virtual finding precedes disconnected
+findings. All four correlated source categories report successful matching
+coverage for these findings. No real addresses, aliases, descriptions, machine
+names, paths, MACs, SSIDs or run identifiers are included here.
+
+The user transcript confirms report production and the saved evidence remains
+ignored by Git. This is a user-run non-elevated passive validation, not a new
+agent collection. It does not establish resolution of a network fault or Windows
+11 compatibility through testing; Windows 11 remains untested. Other test suites were not included in this
+transcript; their prior results and sandbox restrictions remain documented below.
+No original diagnostic report was modified; no commit or push was performed.
+
+---
+
+# Adapter availability/APIPA fixes (0.3.1, schema 6)
+
+2026-09-23: Windows 10, build 19045, Windows PowerShell 5.1.19041.7725,
+non-elevated agent sandbox, effective policy RemoteSigned. No policy changes,
+restriction bypasses, external probes, network changes, commits or pushes.
+
+Targeting inspection: the adapter inventory already included hidden adapters.
+The prior provider calls used escaped Name patterns and IncludeHidden. Local
+NetAdapter CDXML confirms these providers expose Name queries and IncludeHidden.
+To avoid assuming that pattern escaping is portable across the provider boundary,
+new calls enumerate hidden provider objects and match names literally in PowerShell.
+Available returned interface index/GUID must agree with the inventoried identity.
+This is a targeting correction/guard, not proof that the earlier real failures
+were caused by a targeting bug or by unsupported hardware. No real reports were
+modified or reclassified.
+
+Normal file commands and actual results from the repository directory:
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-AdapterApipa.ps1` | 0 | 26 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1` | 0 | 42 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1` | 0 | 94 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1` | 0 | 23 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Dns.ps1` | 0 | 39 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Presentation.ps1` | 0 | 33 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1` | 1 | File.Replace access denied; full suite remains unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-Probes.ps1` | 1 | TLS initialization failed with "No credentials are available in the security package"; full suite unverified |
+
+The focused suite tests literal names containing spaces/brackets/*/?, hidden
+inventory inclusion, matching identity, mismatched identity, structured missing
+objects for both providers, permission/unexpected errors, and unrelated
+ObjectNotFound errors. APIPA cases include active/disconnected physical, active
+virtual and missing adapters; multiple addresses; healthy physical alongside
+other APIPA interfaces; unknown enum retention; evidence references/times; HTML
+encoding; and consistent unavailable/timeout statuses in summaries/map coverage.
+The existing probe-review suite additionally exercises actual worker termination,
+cleanup and continuation. All new output remains under ignored output/tests/.
+No Windows 11 or resolution of a real network fault is claimed. These are
+synthetic tests; actual provider matching after this change still needs validation.
+
+The milestone suite error remains:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12 char:49
+FullyQualifiedErrorId: UnauthorizedAccessException
+```
+
+Manual commands, from the repository directory in your normal terminal:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-AdapterApipa.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1
+$LASTEXITCODE
+```
+
+The collector command is passive. Review adapter Unavailable explanations and
+original errors separately, and APIPA context in Observations/Hypotheses and
+Findings.ApipaDetails. A successful collector exit does not establish connectivity.
+Provider inventories and adapter identities can change between sequential checks;
+missing returned identity fields limit verification. Enumeration is repeated per
+bounded adapter check and may be slower than name-pattern queries. No existing
+user diagnostic artifacts were changed.
+
+---
+
+# User-run logical-map validation: completed with partial provider coverage
+
+The user supplied normal Windows PowerShell terminal output for:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1
+$LASTEXITCODE
+```
+
+The logical-map suite passed **94 assertions**, exit **0**. The passive collector
+also returned exit **0**. The agent independently inspected its saved JSON:
+collector **0.3.0**, schema **5**, CollectionStatus **Complete**, Windows PowerShell
+**5.1.19041.7725**, **IsElevated=False**, and active connectivity tests disabled.
+HTML exists. Generated evidence remains ignored by Git. No real machine names,
+paths, addresses, MACs, SSIDs or run identifiers are copied here.
+
+The report contains **72 check records**: **31 Success, 39 Failed, one Unavailable,
+one Skipped**. Adapter statistics succeeded for **10 of 26** adapters; power
+management succeeded for **3 of 26**. The remaining adapter checks report
+`CmdletizationQuery_NotFound_Name` for their respective provider cmdlets, with
+category `ObjectNotFound`. This records missing provider objects for the requested
+names, not proof of network faults or a confirmed explanation of why those objects
+were absent. The DHCP Operational log remains unavailable and connectivity skipped.
+Successful adapter results were retained despite other adapters failing.
+
+The generated map reports **29 interface contexts, 27 interface-scoped subnets,
+162 neighbour-cache observations and 3 eligible endpoint observations**. These are
+logical evidence counts, not physical device counts. There are **42 coverage gaps**,
+including failed/unavailable sources, skipped connectivity, unknown Layer 2 and
+unavailable structured Wi-Fi associations. The extra interface contexts can come
+from sources beyond adapter inventory; they are not claimed to be extra devices.
+
+This validates normal non-elevated end-to-end passive collection, map/report
+production and partial real adapter-provider availability on the user's host.
+The 39 failed checks remain limitations; exit 0 means collection completed, not
+that every provider succeeded. No Windows 11, physical topology/Wi-Fi path or real
+fault validation is claimed. Other suites were not included in this transcript;
+earlier agent sandbox restrictions below remain accurately recorded. No new
+collection, policy change, configuration change, commit or push was performed to
+inspect these results.
+
+---
+
+# Logical network milestone validation (0.3.0, schema 5)
+
+## Latest user-reported validation of d4d5c4d
+
+The user reports Windows 10 Pro build 19045, Windows PowerShell 5.1,
+**non-elevated execution**, **198 assertions passed across six suites**, and
+**passive collector exit 0**: 18 successful checks, one unavailable DHCP
+Operational log, and one skipped connectivity group. These are the user's
+results for commit d4d5c4d, not agent-run validation of the new map milestone.
+No real identifiers or diagnostic paths are included. Windows 11 remains untested.
+
+## Agent validation of the logical map changes
+
+2026-09-23: Windows 10 Pro build 19045.7725, Windows PowerShell
+5.1.19041.7725, non-elevated sandbox, effective policy RemoteSigned. Normal
+script execution was used; no policy changes or restriction bypasses. All suites
+were invoked from the repository directory:
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1` | 0 | 94 logical-map assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1` | 0 | 42 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1` | 1 | Atomic File.Replace access denied; full suite unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-Probes.ps1` | 1 | TLS security-package initialization restriction; full suite unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1` | 0 | 23 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Dns.ps1` | 0 | 39 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-Presentation.ps1` | 0 | 33 assertions passed |
+| `powershell.exe -NoProfile -File .\output\Validate-ReviewSyntax.ps1` | 0 | 21 PowerShell files parsed with the 5.1 AST parser |
+
+The local syntax harness is ignored generated output. The tests execute actual
+.ps1 files and normally dot-source helpers; syntax parsing is not an end-to-end
+collector validation. Unchanged blocking errors:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12 char:49
+FullyQualifiedErrorId: UnauthorizedAccessException
+
+Assertion failed: HTTPS TLS timeout retained (actual outcome: Failed; error:
+Exception calling "BeginAuthenticateAsClient" with "3" argument(s):
+"No credentials are available in the security package")
+At tests/Test-Probes.ps1:8 char:28
+```
+
+Map tests cover two physical interfaces sharing a prefix, overlapping ranges,
+multiple addresses/default routes, scoped IPv6 and IPv4 neighbours, stale,
+incomplete/unreachable/permanent/unknown states, broadcast/multicast filtering,
+missing MACs, repeated IP/MAC observations without merging, separate remote probe
+endpoints, missing/failed coverage, deterministic generation and provenance on
+every node/relationship. Hostile map fields are HTML-encoded, neighbour details
+collapse, and original evidence remains unchanged. Adapter mocks exercise counters,
+unsupported providers, permission failures and successful power evidence. Mocked
+orchestration verifies an independent timeout budget for each adapter check and
+continuation after failure. Its persistence writer is mocked, not a claim that
+sandbox File.Replace worked. Synthetic reports use the real writer in new test
+directories under ignored output/tests/; existing user reports were not touched.
+
+## Manual passive validation
+
+From the repository directory in a normal Windows PowerShell terminal:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Probes.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -LookbackHours 1 -MaxEventsPerLog 10 -MaxNicEvents 8 -MaxPowerEvents 5 -CheckTimeoutSeconds 30
+$LASTEXITCODE
+```
+
+The passive command enables no active probes. Open its printed HTML summary and
+review the logical overview, per-interface neighbours, coverage and per-adapter
+check statuses. Check schema 5/collector 0.3.0 and Complete in JSON; a successful
+collector exit is not proof that every provider succeeded. Provider-specific
+permissions or unavailable power fields should remain explicit per adapter.
+All other regression commands are listed in the table above.
+
+## Remaining limitations
+
+No Windows 11, physical Wi-Fi, actual topology, real fault, or new live adapter
+statistics/power-provider validation was performed. The map uses the local host's
+partial snapshot only. Broadcast detection depends on known local prefixes;
+non-Ethernet MAC formats are conservatively excluded from endpoint-observation
+counts. Provider calls and snapshots are sequential, not atomic. Cache entries,
+route predictions and socket endpoints do not establish physical wiring or
+present reachability. Structured Wi-Fi relationships remain unavailable.
+The full persistence and TLS suites still need normal-terminal execution for
+these edits; earlier successes do not establish a pass for this version.
+No commit or push was performed for this milestone.
+
+---
+
 # User validation and console presentation update
 
 The user reports **165 passing assertions across five suites** and an active

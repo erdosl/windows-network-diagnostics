@@ -55,3 +55,45 @@ function Invoke-SnapshotCollector {
         default { throw "Unknown passive collector: $Name" }
     }
 }
+
+function Invoke-AdapterDetail {
+    param([ValidateSet('AdapterStatistics','AdapterPowerManagement')][string]$Kind,
+        [string]$AdapterName,[int]$InterfaceIndex,[string]$InterfaceGuid)
+    $ErrorActionPreference='Stop'
+    $started=[DateTimeOffset]::Now.ToString('o')
+    try {
+        # The provider Name parameter accepts patterns. Enumerate hidden objects too,
+        # then compare literal names locally; brackets/*/? in aliases cannot broaden a query.
+        if ($Kind -eq 'AdapterStatistics') { $inventory=@(Get-NetAdapterStatistics -Name '*' -IncludeHidden -ErrorAction Stop) }
+        else { $inventory=@(Get-NetAdapterPowerManagement -Name '*' -IncludeHidden -ErrorAction Stop) }
+        $records=@($inventory | Where-Object { [string]::Equals([string]$_.Name,$AdapterName,[StringComparison]::OrdinalIgnoreCase) })
+        if (-not $records.Count) {
+            $missing=[Management.Automation.ErrorRecord]::new([InvalidOperationException]::new('No matching adapter-provider object was returned.'),'AdapterProviderObjectMissing',[Management.Automation.ErrorCategory]::ObjectNotFound,$AdapterName)
+            throw $missing
+        }
+        foreach ($record in $records) {
+            if (($null -ne $record.InterfaceIndex -and [int]$record.InterfaceIndex -ne $InterfaceIndex) -or
+                ($InterfaceGuid -and $record.InterfaceGuid -and ([string]$record.InterfaceGuid).Trim('{}') -ne $InterfaceGuid.Trim('{}'))) {
+                throw [InvalidOperationException]::new('Adapter-provider identity differs from snapshot inventory; no attribution made.')
+            }
+        }
+    } catch {
+        $_.Exception.Data['AdapterProviderContext']=$Kind
+        $_.Exception.Data['AdapterIdentity']=[pscustomobject]@{Name=$AdapterName;InterfaceIndex=$InterfaceIndex;InterfaceGuid=$InterfaceGuid;IncludeHidden=$true;Selection='OrdinalIgnoreCase literal name after provider inventory enumeration'}
+        $expected=$(if($Kind -eq 'AdapterStatistics'){'Get-NetAdapterStatistics'}else{'Get-NetAdapterPowerManagement'})
+        if ($_.CategoryInfo.Category -eq 'ObjectNotFound' -and
+            ($_.FullyQualifiedErrorId -eq 'AdapterProviderObjectMissing' -or $_.FullyQualifiedErrorId -eq ('CmdletizationQuery_NotFound_Name,'+$expected))) {
+            $_.Exception.Data['AdapterProviderMissing']=$true
+        }
+        throw
+    }
+    foreach ($record in $records) {
+        $fields=[ordered]@{}
+        # Retain supported provider properties, excluding transport/CIM bookkeeping.
+        foreach ($property in $record.PSObject.Properties) {
+            if ($property.Name -notmatch '^(Cim|PS|RunspaceId)' -and $property.MemberType -in @('Property','NoteProperty','AliasProperty')) { $fields[$property.Name]=$property.Value }
+        }
+        [pscustomobject]@{AdapterName=$AdapterName;InterfaceIndex=$InterfaceIndex;InterfaceGuid=$InterfaceGuid;StartedAt=$started;CompletedAt=[DateTimeOffset]::Now.ToString('o');Fields=[pscustomobject]$fields
+            Limitation=$(if($Kind -eq 'AdapterStatistics'){'Single cumulative counter sample, not a rate or proof of a current fault.'}else{'Reported power-management capabilities/settings only; no changes made.'})}
+    }
+}

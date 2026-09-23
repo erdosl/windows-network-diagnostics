@@ -1,3 +1,6 @@
+. (Join-Path $PSScriptRoot 'LogicalNetwork.ps1')
+. (Join-Path $PSScriptRoot 'Findings.ps1')
+
 function Get-AddressClassification {
     param([AllowNull()][AllowEmptyString()][string]$Address)
     $parsed = $null
@@ -21,13 +24,27 @@ function Invoke-DiagnosticCheck {
         [pscustomobject]@{ Name = $Name; StartedAt = $started; Status = 'Success'; Data = $data; Error = $null }
     } catch {
         $status = 'Failed'
-        if ($_.Exception -is [UnauthorizedAccessException] -or $_.CategoryInfo.Category -eq 'PermissionDenied' -or
+        $provider=$_.Exception.Data['AdapterProviderContext']
+        $explanation=$null
+        if ($provider) {
+            $exception=$_.Exception
+            $denied=$_.CategoryInfo.Category -eq 'PermissionDenied'
+            while ($null -ne $exception) {
+                if ($exception -is [UnauthorizedAccessException] -or
+                    ($exception -is [ComponentModel.Win32Exception] -and $exception.NativeErrorCode -eq 5) -or $exception.HResult -eq -2147024891) { $denied=$true }
+                $exception=$exception.InnerException
+            }
+            if ($denied) { $status='PermissionDenied' }
+            elseif ($_.Exception.Data['AdapterProviderMissing']) { $status='Unavailable'; $explanation='No matching adapter-provider object was returned.' }
+            elseif ($_.Exception -is [Management.Automation.CommandNotFoundException] -or $_.Exception -is [NotSupportedException]) { $status='Unavailable' }
+        }
+        elseif ($_.Exception -is [UnauthorizedAccessException] -or $_.CategoryInfo.Category -eq 'PermissionDenied' -or
             $_.Exception.Message -match '(?i)access.*denied|permission|0x80070005|requires elevation|returns error 5\b') { $status = 'PermissionDenied' }
         elseif ($_.Exception -is [System.Management.Automation.CommandNotFoundException] -or
             $_.FullyQualifiedErrorId -match 'NoMatchingLogsFound|NoMatchingProvidersFound' -or
             $_.Exception -is [System.NotSupportedException]) { $status = 'Unavailable' }
         [pscustomobject]@{ Name = $Name; StartedAt = $started; Status = $status; Data = @(); Error = [pscustomobject]@{
-            Message = $_.Exception.Message; Id = $_.FullyQualifiedErrorId; Category = [string]$_.CategoryInfo.Category
+            Message = $_.Exception.Message; Id = $_.FullyQualifiedErrorId; Category = [string]$_.CategoryInfo.Category; ExceptionType=$_.Exception.GetType().FullName; Explanation=$explanation; AdapterIdentity=$_.Exception.Data['AdapterIdentity']
         } }
     }
 }
@@ -36,13 +53,8 @@ function Get-DiagnosticFindings {
     param([object[]]$Checks)
     $observations = @()
     $hypotheses = @()
-    $addresses = @($Checks | Where-Object { $_.Name -eq 'IPAddresses' -and $_.Status -eq 'Success' } | ForEach-Object { $_.Data })
-    foreach ($address in $addresses) {
-        if ((Get-AddressClassification $address.IPAddress) -eq 'APIPA') {
-            $observations += "APIPA address $($address.IPAddress) on interface $($address.InterfaceIndex)."
-            $hypotheses += 'An IPv4 link-local address may indicate missing DHCP service or an intentional local-only configuration; this snapshot does not establish the cause.'
-        }
-    }
+    $apipa = @(Get-ApipaContext $Checks)
+    foreach ($item in $apipa) { $observations += $item.Observation; $hypotheses += $item.Hypothesis }
     $adapters = @($Checks | Where-Object { $_.Name -eq 'Adapters' -and $_.Status -eq 'Success' } | ForEach-Object { $_.Data })
     # IANA interface types: Ethernet=6, IEEE 802.11=71. Do not infer from localized names.
     $ethernet = @($adapters | Where-Object { $_.Status -eq 'Up' -and $_.HardwareInterface -eq $true -and $_.InterfaceType -eq 6 })
@@ -51,7 +63,7 @@ function Get-DiagnosticFindings {
         $observations += 'Physical Ethernet and Wi-Fi adapters are simultaneously up (link state only).'
         $hypotheses += 'Multiple active links may affect route selection; routes and metrics require review. This is not proof of a connectivity fault.'
     }
-    [pscustomobject]@{ Observations = @($observations); Hypotheses = @($hypotheses | Select-Object -Unique) }
+    [pscustomobject]@{ ApipaDetails = $apipa; Observations = @($observations); Hypotheses = @($hypotheses | Select-Object -Unique) }
 }
 
 function Get-CheckSummary {
@@ -160,7 +172,8 @@ function Get-DnsResultSummary {
 function Write-DiagnosticReport {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][string]$OutputDirectory)
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force -ErrorAction Stop
-    $json = ConvertTo-Json -InputObject $Evidence -Depth 16
+    $Evidence | Add-Member NoteProperty LogicalNetwork (Get-LogicalNetworkModel $Evidence) -Force
+    $json = ConvertTo-Json -InputObject $Evidence -Depth 24
     $jsonPath = Join-Path $OutputDirectory 'evidence.json'
     $htmlPath = Join-Path $OutputDirectory 'summary.html'
     $encode = { param($Value) [System.Net.WebUtility]::HtmlEncode([string]$Value) }
@@ -180,6 +193,7 @@ function Write-DiagnosticReport {
         foreach ($item in $items) { $null = $html.Append('<li>' + (& $encode $item) + '</li>') }
         $null = $html.Append('</ul>')
     }
+    $null = $html.Append((ConvertTo-LogicalNetworkHtml $Evidence.LogicalNetwork))
     $null = $html.Append('<h2>Interfaces</h2><p>Joined by interface index within this snapshot. Default routes are candidates, not proof of an active gateway. Empty lists may reflect missing source checks; see SourceStatus.</p>')
     $interfaces = @(Get-InterfaceSummary -Checks $Evidence.Checks)
     if ($interfaces.Count -eq 0) { $null = $html.Append('<p>No interface data available. See check statuses below.</p>') }
@@ -217,9 +231,11 @@ function Write-DiagnosticReport {
     $null = $html.Append('</table>')
     $null = $html.Append('<h2>Checks and raw evidence</h2>')
     foreach ($check in $Evidence.Checks) {
+        if ($check.Name -eq 'Neighbours') { $null = $html.Append('<details><summary>Raw neighbour-cache evidence</summary>') }
         $null = $html.Append('<h3>' + (& $encode $check.Name) + ': ' + (& $encode $check.Status) + '</h3><pre>')
         $detail = ConvertTo-Json -InputObject $check -Depth 14
         $null = $html.Append((& $encode $detail) + '</pre>')
+        if ($check.Name -eq 'Neighbours') { $null = $html.Append('</details>') }
     }
     $null = $html.Append('</body></html>')
     # Explicit UTF-8 works on Windows PowerShell 5.1 and does not depend on console encoding.

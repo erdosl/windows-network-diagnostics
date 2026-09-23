@@ -23,9 +23,16 @@ foreach ($file in @('Core.ps1','State.ps1','Execution.ps1','Events.ps1','Collect
 if ($env:OS -ne 'Windows_NT') { throw 'This collector requires Windows 10/11.' }
 $paths = Invoke-SnapshotRun -RepositoryRoot $PSScriptRoot @PSBoundParameters
 Get-CheckSummary -Checks $paths.Evidence.Checks | Format-Table Name,CollectionStatus,ProbeOutcome,TimeoutScope -AutoSize -Wrap | Out-Host
+$missingProviders = @($paths.Evidence.Checks | Where-Object { $_.Error.Explanation -eq 'No matching adapter-provider object was returned.' })
+if ($missingProviders.Count) { Write-Host ("{0} adapter checks unavailable: No matching adapter-provider object was returned. This does not establish faulty or unsupported hardware." -f $missingProviders.Count) }
 $consoleWidth = 80
 try { if ($Host.UI.RawUI.WindowSize.Width -ge 20) { $consoleWidth = $Host.UI.RawUI.WindowSize.Width } } catch { }
 Format-DnsConsoleReport $paths.Evidence.Checks -Width ([Math]::Min(1000, $consoleWidth)) | ForEach-Object { Write-Host $_ }
+$map = $paths.Evidence.LogicalNetwork
+Write-Host ("Logical map: {0} interfaces, {1} interface-scoped subnets, {2} neighbour observations ({3} eligible endpoint observations, not physical devices)." -f $map.Counts.Interfaces,$map.Counts.Subnets,$map.Counts.NeighbourObservations,$map.Counts.EligibleEndpointObservations)
+Write-Host 'Physical Layer 2 paths unknown; structured Wi-Fi association unavailable.'
+$gaps = @($map.Coverage | Where-Object { $_.Status -ne 'Success' })
+Write-Host ("Coverage: {0} unavailable, failed, uncollected or unknown sources; see HTML for details." -f $gaps.Count)
 Write-Host "JSON evidence: $($paths.JsonPath)"
 Write-Host "HTML summary:  $($paths.HtmlPath)"
 $paths | Select-Object JsonPath,HtmlPath
