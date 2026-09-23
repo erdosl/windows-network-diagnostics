@@ -1,0 +1,52 @@
+# Generated diagnostic reports and local output
+/reports/
+/diagnostic-reports/
+/diagnostics/
+/captures/
+/output/
+/outputs/
+/artifacts/
+/logs/
+/tmp/
+/temp/
+*.log
+*.etl
+*.evtx
+*.dmp
+*.cab
+*.zip
+*.7z
+
+# Packet captures, including rotated captures
+*.pcap*
+*.cap
+*.netcap
+
+# Credentials, environment configuration, and private keys
+.env
+.env.*
+!.env.example
+/credentials/
+/secrets/
+credentials.*
+secrets.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.jks
+id_rsa*
+id_ed25519*
+*.local.*
+
+# Local editor, OS, and runtime output
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+.DS_Store
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+node_modules/
