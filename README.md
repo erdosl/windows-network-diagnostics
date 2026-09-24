@@ -6,7 +6,7 @@ separate bounded observation, explicit interface probes, and offline DHCP/ARP
 analysis. Native capture currently returns an explicit capability refusal;
 it does not start a session. Ordinary snapshots remain passive by default.
 
-Collector `0.5.0` (schema 9) collects bounded Windows 10/11 network snapshots for
+Collector `0.5.2` (schema 9) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -644,3 +644,22 @@ references preserve provenance for an empty enumeration with no data-row referen
 Raw checks remain unchanged. Schema-6/7/8 baselines are re-derived from raw checks
 using the same rules, not their older availability labels. Schema 8 explicitly
 versions this semantic change; collector 0.4.0 cannot read a schema-8 baseline.
+
+### Observation corrections in 0.5.2
+
+ObservationComparisonVersion 3 compares DHCP records independently by stable
+identity and reports source coverage separately. Unmatched or conflicting records,
+including IP-disabled records, remain unassessed with artifact-qualified reasons;
+they no longer invalidate unrelated adapters. A partial source is never wholly
+Unchanged. Configuration changes take precedence over lease timestamp refreshes.
+
+The scheduler retains attempted and useful partial samples but avoids creating a
+final empty sample when less than the one-second minimum worker budget remains.
+The summary shows complete/partial counts and actual intervals. Statistics use
+one bounded inventory worker per observation sample, with individual adapter
+coverage. This reduces worker startup overhead; it does not guarantee a cadence.
+Snapshot collection is unchanged. See docs/EVIDENCE-EXTENSIONS.md for contracts.
+
+Passive validation from the repository directory (no active probes or capture):
+
+powershell.exe -NoProfile -File .\Watch-NetworkDiagnostics.ps1 -DurationSeconds 120 -IntervalSeconds 10 -CheckTimeoutSeconds 10

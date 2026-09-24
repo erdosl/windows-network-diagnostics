@@ -58,13 +58,15 @@ function Invoke-SnapshotCollector {
 
 function Invoke-AdapterDetail {
     param([ValidateSet('AdapterStatistics','AdapterPowerManagement')][string]$Kind,
-        [string]$AdapterName,[int]$InterfaceIndex,[string]$InterfaceGuid)
+        [string]$AdapterName,[int]$InterfaceIndex,[string]$InterfaceGuid,
+        [AllowEmptyCollection()][object[]]$ProviderInventory)
     $ErrorActionPreference='Stop'
     $started=[DateTimeOffset]::Now.ToString('o')
     try {
         # The provider Name parameter accepts patterns. Enumerate hidden objects too,
         # then compare literal names locally; brackets/*/? in aliases cannot broaden a query.
-        if ($Kind -eq 'AdapterStatistics') { $inventory=@(Get-NetAdapterStatistics -Name '*' -IncludeHidden -ErrorAction Stop) }
+        if ($PSBoundParameters.ContainsKey('ProviderInventory')) { $inventory=@($ProviderInventory) }
+        elseif ($Kind -eq 'AdapterStatistics') { $inventory=@(Get-NetAdapterStatistics -Name '*' -IncludeHidden -ErrorAction Stop) }
         else { $inventory=@(Get-NetAdapterPowerManagement -Name '*' -IncludeHidden -ErrorAction Stop) }
         $records=@($inventory | Where-Object { [string]::Equals([string]$_.Name,$AdapterName,[StringComparison]::OrdinalIgnoreCase) })
         if (-not $records.Count) {
@@ -95,5 +97,26 @@ function Invoke-AdapterDetail {
         }
         [pscustomobject]@{AdapterName=$AdapterName;InterfaceIndex=$InterfaceIndex;InterfaceGuid=$InterfaceGuid;StartedAt=$started;CompletedAt=[DateTimeOffset]::Now.ToString('o');Fields=[pscustomobject]$fields
             Limitation=$(if($Kind -eq 'AdapterStatistics'){'Single cumulative counter sample, not a rate or proof of a current fault.'}else{'Reported power-management capabilities/settings only; no changes made.'})}
+    }
+}
+
+# Observation-only batch. Snapshot callers continue to enumerate independently.
+function Invoke-ObservationStatistics {
+    param([object[]]$Adapters)
+    $collectedAt=[DateTimeOffset]::Now.ToString('o')
+    $inventory=@(Get-NetAdapterStatistics -Name '*' -IncludeHidden -ErrorAction Stop)
+    $completedAt=[DateTimeOffset]::Now.ToString('o')
+    foreach($adapter in $Adapters){
+        $result=Invoke-DiagnosticCheck ('AdapterStatistics:'+$adapter.InterfaceIndex) {
+            $rows=@($inventory | Where-Object {[string]::Equals([string]$_.Name,[string]$adapter.Name,[StringComparison]::OrdinalIgnoreCase)})
+            if($rows.Count -gt 1 -or @($Adapters | Where-Object Name -eq $adapter.Name).Count -ne 1 -or
+                ($adapter.InterfaceGuid -and @($Adapters | Where-Object InterfaceGuid -eq $adapter.InterfaceGuid).Count -gt 1)){
+                throw [InvalidOperationException]::new('Ambiguous adapter-provider mapping; no attribution made.')
+            }
+            Invoke-AdapterDetail -Kind AdapterStatistics -AdapterName $adapter.Name -InterfaceIndex $adapter.InterfaceIndex -InterfaceGuid $adapter.InterfaceGuid -ProviderInventory $inventory
+        }
+        $result | Add-Member NoteProperty AdapterIdentity ($adapter | Select-Object Name,InterfaceIndex,InterfaceGuid)
+        foreach($row in $result.Data){$row.StartedAt=$collectedAt;$row.CompletedAt=$completedAt}
+        $result
     }
 }

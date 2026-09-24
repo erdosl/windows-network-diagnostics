@@ -1,3 +1,46 @@
+# Observation corrections in 0.5.2
+
+Root schema remains 9; snapshot ContextEvidence contract remains 3. Observation
+comparison/state contract changes from 2 to 3. Prior raw samples may be rederived;
+older derived DHCP state is not silently compared using the new semantics.
+
+
+Both BeforeAdapterContext and AfterAdapterContext are arrays: absent contexts are
+[], never [null]. Valid objects retain null-valued properties. This representation
+correction requires no additional schema or contract increment.
+DHCP state retains DHCPEnabled, DHCPServer, gateways, DNS servers, DNSDomain and
+lease obtained/expires timestamps; missing properties differ from observed nulls.
+Configuration changes take precedence over timestamp-only LeaseRefreshed outcomes.
+Each DHCP comparison has Adapters, Coverage, ChangedFields and Reasons.
+Per-adapter outcomes are Changed, LeaseRefreshed, Unchanged or Not assessed.
+Coverage is Complete only when all records can be assessed. Aggregate Changed or
+LeaseRefreshed describes known results, not complete coverage; mixed unchanged
+and unassessed records aggregate to Not assessed with Partial coverage.
+SettingID and adapter GUID must be consistent with unique within-sample inventory
+attribution. Index helps detect conflicts within a sample, never establish
+cross-sample continuity. Missing counterpart rows do not establish removal.
+IPEnabled=false records remain in evidence and coverage. Reasons contain Code,
+Artifact, Path and Explanation. Before/after raw record references and context
+remain available; HTML exposes outcomes and reasons before the detailed JSON.
+
+A run finishing its allotted duration can be Complete while individual samples
+are Incomplete. One second remains the minimum scheduling budget. Preflight and
+post-checkpoint guards prevent an unattempted empty sample. Attempted failures
+and timeouts remain; useful partial samples are not rejected for lacking a full
+sample budget. Finalized sample references retain SHA256 and actual intervals.
+Unexpected interruption leaves an incomplete recovery checkpoint.
+
+ObservationStatistics enumerates hidden provider objects once in one bounded
+worker. Per-adapter results use literal names with returned GUID/index conflict
+checks; duplicate mappings are errors, missing rows are Unavailable, never zero.
+Derived AdapterStatistics checks reference the raw batch check. Batch failure or
+worker timeout propagates coverage gaps to each inventoried adapter. Counters
+retain individual timestamps and existing reset/discontinuity rules. No adapter
+class is excluded. Snapshot calls still enumerate independently; only an optional
+pre-enumerated inventory parameter is shared. Worker tree termination is unchanged.
+Real-machine performance and provider behavior require user validation; a ten-second
+cadence is not promised.
+
 # Evidence extensions: 0.5.0 / schema 9
 
 This milestone is divided into four reviewable source/test groups. Ordinary

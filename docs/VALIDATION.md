@@ -1,3 +1,103 @@
+# Observation serialization follow-up and user validation: 0.5.2
+
+## User-run evidence (reported separately from agent tests)
+
+The user supplied the following validation for collector 0.5.2, schema 9,
+observation comparison contract 3. Passive observation requested 120 seconds,
+a 10-second interval and a 10-second check timeout; the user reported exit code 0.
+The supplied artifact-review results confirmed ten complete samples, no empty or
+partial samples, and matching manifest hashes for all ten samples.
+Each of the nine DHCP comparisons retained 23 Unchanged records and two Not assessed
+records; active Ethernet remained independently assessable. Average actual sampling
+interval was approximately 11.94 seconds. Statistics batch duration was approximately
+0.99-1.20 seconds.
+
+This validates persistence and performance for that particular live run. It does
+not establish live DHCP-change detection, counter-reset handling or Windows 11
+compatibility. These are user-supplied validation results, not a new agent-run
+observation or artifact reinspection. No reports or personal identifiers are tracked.
+
+## Agent-run follow-up
+
+Normal Windows PowerShell 5.1.19041.7725 script execution; synthetic inputs only.
+Every command below was run from the repository directory:
+- powershell.exe -NoProfile -File .\tests\Test-ObservationSerialization.ps1
+  Exit 0, 25 serialized-JSON assertions: before/after empty arrays, one/multiple
+  objects, null-valued object properties, comparison outcomes and references.
+- powershell.exe -NoProfile -File .\tests\Test-LiveObservation.ps1
+  Exit 0, 29 assertions; synthetic providers, modeled writes/hashes and clock.
+- powershell.exe -NoProfile -File .\tests\Test-ObservationDhcp.ps1
+  Exit 0, 17 synthetic assertions.
+- powershell.exe -NoProfile -File .\tests\Test-Observation.ps1
+  Exit 0, 13 synthetic assertions.
+- powershell.exe -NoProfile -File .\tests\Test-ObservationModel.ps1
+  Exit 0, 7 assertions; modeled persistence and collectors.
+- powershell.exe -NoProfile -File .\tests\Test-AdditionalOrchestrationModel.ps1
+  Exit 0, 8 assertions; modeled persistence and collectors.
+- powershell.exe -NoProfile -File .\tests\Test-EntryLoading.ps1
+  Exit 0, 8 entry/help and dot-source assertions, different directory/path with spaces.
+- powershell.exe -NoProfile -File .\tests\Test-ObservationRun.ps1
+  Exit 1, the restricted-agent persistence error below; also warned:
+  "Final observation checkpoint failed; earlier files remain recoverable."
+- powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
+  Exit 1, the same persistence error:
+
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12 char:49
+CategoryInfo: NotSpecified: (:) [], ParentContainsErrorRecordException
+FullyQualifiedErrorId: UnauthorizedAccessException
+
+Passing total: 107 assertions across seven suites. Agent atomic-persistence tests
+remain blocked; their failures are not passes and do not invalidate the separately
+attributed successful user run. No access-control bypass or weakened persistence.
+No live probes, capture or network changes. git diff --check passed.
+
+Both absent adapter-context collections now serialize as [], while valid objects
+and their null-valued properties remain intact. This corrects empty-collection
+representation; collector 0.5.2, schema 9 and comparison contract 3 are unchanged.
+
+# Initial live-observation corrections: 0.5.2
+
+Agent-run validation, 2026-09-24. Windows 10 build 19045, non-elevated;
+normal Windows PowerShell tests report 5.1.19041.7725. CurrentUser RemoteSigned;
+no policy changes or bypass. Host shell is PowerShell 7.6.5, but every test below
+was launched through powershell.exe -NoProfile -File.
+
+Commands and final results (each explicitly observed exit code):
+- powershell.exe -NoProfile -File .\tests\Test-LiveObservation.ps1
+  Exit 0: 29 assertions; synthetic providers, controlled clock and modeled writes/hashes.
+- powershell.exe -NoProfile -File .\tests\Test-ObservationDhcp.ps1
+  Exit 0: 17 assertions; synthetic DHCP evidence.
+- powershell.exe -NoProfile -File .\tests\Test-Observation.ps1
+  Exit 0: 13 assertions, including counter deltas/discontinuities.
+- powershell.exe -NoProfile -File .\tests\Test-ObservationModel.ps1
+  Exit 0: 7 assertions, mocked persistence/collectors, including interruption.
+- powershell.exe -NoProfile -File .\tests\Test-AdditionalOrchestrationModel.ps1
+  Exit 0: 8 assertions, mocked snapshot orchestration.
+- powershell.exe -NoProfile -File .\tests\Test-EntryLoading.ps1
+  Exit 0: 8 assertions, normal entry/help and dot-sourcing from another directory
+  and a path with spaces. No collection, probes or capture.
+- powershell.exe -NoProfile -File .\tests\Test-ObservationRun.ps1
+  Exit 1: File.Replace at src/State.ps1:12, UnauthorizedAccessException,
+  "Access to the path is denied." Final checkpoint warning also emitted.
+- powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
+  Exit 1: same File.Replace restriction.
+
+Final successful total: 82 assertions. Real atomic replacement, crash recovery and
+end-to-end observation remain unverified in this restricted context. Model tests
+do not validate filesystem durability or real provider performance.
+An earlier DHCP test failed because its assertion read Reasons as strings; it now
+checks structured Explanation. The final normal script execution passed.
+An environment-inspection command incorrectly expanded the child version expression;
+subsequent test outputs establish the Windows PowerShell version. CIM OS inspection
+was access denied; the OS build was read through System.Environment instead.
+
+No live probes, capture, configuration changes or actual observation were run.
+Windows 11 remains untested. Prior user-run results below concern earlier versions.
+Run the commands above in a normal Windows terminal to validate real persistence.
+Optional passive validation from the repository:
+powershell.exe -NoProfile -File .\Watch-NetworkDiagnostics.ps1 -DurationSeconds 120 -IntervalSeconds 10 -CheckTimeoutSeconds 10
+
 # Final pre-commit review (0.5.0)
 
 The final review tightened proxy redaction to suppress entire values containing a
