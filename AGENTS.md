@@ -67,3 +67,19 @@
 - APIPA findings retain every address and interface context. Prioritize active
   physical links, preserve missing sources/raw enums, and keep DHCP possibilities
   separate from observations. Never infer host-only purpose from adapter names.
+
+- A selected DHCP server and successful client probes do not assess competing
+  DHCP servers on the LAN. Label this coverage gap explicitly.
+- Optional baseline/expectation inputs use bounded workers; input errors must not
+  discard the ordinary snapshot. Compare stable GUIDs, expose ambiguity, and never
+  infer continuity between snapshots or match solely on MAC, alias or index.
+- Expectations are supplied policy, not a rogue-server detector. Missing or
+  disconnected evidence is not a mismatch. Historical event correlation uses
+  explicit structured identifiers, preserves provenance, and does not establish cause.
+
+- Derived missing scalars must be real nulls (not AutomationNull); empty address
+  collections contain no null elements. Preserve raw input and availability metadata.
+- Store baseline source records once, limited to consumed check families. References
+  identify snapshot scope/run and resolve within the report; never import prior
+  comparisons or nested baseline history. Keep important changes visible and carry
+  adapter state into comparison presentation.

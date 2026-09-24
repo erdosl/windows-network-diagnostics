@@ -1,6 +1,6 @@
 # Windows network diagnostics
 
-Milestone 3 (`0.3.1`) collects bounded Windows 10/11 network snapshots for
+Collector `0.4.0` (schema 7) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -184,6 +184,8 @@ Code references: [Microsoft DNS error codes](https://learn.microsoft.com/en-us/w
 
 | Parameter | Default | Bounds / meaning |
 | --- | --- | --- |
+| `PreviousSnapshotPath` | omitted | Optional schema 6/7 evidence JSON; same computer; bounded input worker |
+| `ExpectationsPath` | omitted | Optional version 1 expectations JSON; bounded input worker |
 | `LookbackHours` | 24 | 1-168; event history ending at collection start |
 | `MaxEventsPerLog` | 200 | 1-1000; System network group and each dedicated log |
 | `MaxNicEvents` | 200 | 1-1000; independent System NIC group |
@@ -237,7 +239,7 @@ by index, retains all addresses and default routes, shows family-specific metric
 and reports unavailable sources. It does not choose an "active gateway" from
 configuration. Raw check evidence remains below the summaries and in JSON.
 
-Schema **6** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
+Schema **7** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
 `StartedAt`/`CompletedAt` with offsets, `CollectionStatus`, `Revision`, `PendingCheck`,
 `PlannedChecks`, `Parameters`, and `CollectionError`. `CollectedAt` remains an alias
 for start time. Parameters formerly at the root now live under `Parameters`.
@@ -322,6 +324,10 @@ powershell.exe -NoProfile -File .\tests\Test-ProbeReview.ps1
 powershell.exe -NoProfile -File .\tests\Test-Dns.ps1
 powershell.exe -NoProfile -File .\tests\Test-Presentation.ps1
 powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1
+powershell.exe -NoProfile -File .\tests\Test-DhcpContext.ps1
+powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
+powershell.exe -NoProfile -File .\tests\Test-DhcpReview.ps1
+powershell.exe -NoProfile -File .\tests\Test-EventCorrelation.ps1
 ```
 
 They are dependency-free. Tests use synthetic data/mocked collectors, real local
@@ -388,3 +394,188 @@ Focused regression command:
 ```powershell
 powershell.exe -NoProfile -File .\tests\Test-AdapterApipa.ps1
 ```
+
+## DHCP context, comparison and expectations (0.4.0 / schema 7)
+
+**Competing DHCP servers: not assessed.** A healthy client using one selected
+server can coexist with another server configuring other clients differently.
+Neither a selected server nor successful DNS/TCP/HTTPS probes establishes that
+only one DHCP server exists. No DHCP discovery traffic is sent.
+
+The new per-interface DHCP section retains identity, current MAC, physical/virtual
+classification, link/connection state, IPv4 prefixes, DHCP enabled state, selected
+server, configured gateways/DNS/domain, lease times, and evidence references.
+Missing fields stay unknown. Disconnected configuration is labelled retained.
+Sentinels such as `255.255.255.255` remain raw evidence but are not usable selected
+servers. Gateway/DNS values are configured values; their DHCP origin is not inferred.
+WMI configuration supplies gateways/DNS first; default-route next hops and DNS
+inventory provide fallbacks. The source and family-specific DNS inventory remain
+visible. DNS fallback groups by address family, preserving preference within each
+family; it does not establish a system-wide preference between IPv4 and IPv6.
+
+Lease duration is expiry minus obtained time when both are valid and ordered.
+Remaining seconds use the DHCP source check's completion timestamp (and can be
+negative), not the viewer's clock. Offset ISO timestamps, PowerShell serialized
+dates such as `/Date(0+0100)/`, and CIM DMTF timestamps are handled.
+Invalid, absent and offset-free serialized times are unknown. Raw dates remain in
+checks. Retained lease times on disabled/disconnected adapters do not establish
+an active lease or current connectivity.
+
+Optional inputs do not enable active probes:
+
+```powershell
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -PreviousSnapshotPath '.\output\prior snapshot\evidence.json'
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -ExpectationsPath '.\output\expectations.json'
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -PreviousSnapshotPath '.\output\prior snapshot\evidence.json' -ExpectationsPath '.\output\expectations.json'
+```
+
+Paths are resolved from the caller's working directory. Each input is read once
+by an isolated worker using `CheckTimeoutSeconds`, with the same hard termination
+and cleanup as collection checks. Invalid JSON, unsupported baseline schemas,
+incompatible computer names, invalid rules, permission failures and worker
+timeouts are reported in `ContextInputs` and the derived section; ordinary
+collection continues. Baselines newer than the current start are rejected by the
+comparison. The input worker deadline bounds processing; there is no report-size
+cutoff. Very large files can still exceed available memory or the worker deadline,
+which is reported without losing ordinary collection. Input paths, effective rules and referenced
+baseline identity are diagnostic data; keep them under ignored `output/`.
+
+Adapters match only by normalized nonempty InterfaceGuid/SettingID GUIDs. These
+are joined within a snapshot by interface index; disagreement or duplicate GUIDs
+is ambiguous. There is deliberately no alias/MAC/index cross-snapshot fallback.
+MAC changes remain visible. Computer name compatibility is a safeguard, not
+cryptographic proof of machine identity. Adapter disappearance/appearance requires
+complete, successful relevant inventory without unidentified adapters. Missing
+values/checks are `Not assessed`, not configuration changes. Address and gateway
+sets ignore order; DNS list order is significant. Advanced obtained/expiry times
+are labelled `Lease refreshed`, without claiming a captured renewal exchange or
+its cause. Baseline/current identity, collection state and timestamps are retained.
+Two snapshots do not establish continuous configuration or health between them.
+
+Create an expectations file with your own addresses. This example uses synthetic
+identifiers and documentation-reserved addresses, not recommended network settings:
+
+```json
+{
+  "Version": 1,
+  "Defaults": {
+    "AllowedDhcpServers": ["192.0.2.1"],
+    "AllowedGateways": ["192.0.2.1"]
+  },
+  "Interfaces": [
+    {
+      "InterfaceGuid": "11111111-1111-1111-1111-111111111111",
+      "Rules": {
+        "AllowedDhcpServers": ["198.51.100.1"],
+        "AllowedGateways": ["198.51.100.1"],
+        "DnsServers": ["198.51.100.53", "203.0.113.53"]
+      }
+    }
+  ]
+}
+```
+
+`Defaults` and `Interfaces` are optional. Each override replaces only its supplied
+fields; omitted fields inherit defaults. GUID overrides must be unique. Unknown
+keys, invalid addresses, scalar address lists and empty lists are rejected. Server
+and gateway rules mean every observed value must be in the allowed list, not that
+every allowed address must be configured. `DnsServers` is **opt-in exact ordered
+list equality**, using normalized IP spelling. Omit it to leave DNS unassessed.
+There are no built-in expected addresses. Outcomes are `Match`, `Mismatch`,
+`Not applicable` (DHCP disabled) and `Not assessed` (no rule, missing, ambiguous,
+invalid or disconnected evidence). Assessment requires an up link; DHCP server
+assessment also requires known enabled DHCP. A mismatch means only **outside
+supplied expectations**, never a rogue server or proven root cause. Effective rules,
+raw observations and source references accompany each assessment.
+
+Historical event context uses named XML GUID/MAC fields, retaining each identifier
+and its exact-match basis, current candidates and ambiguity. Index/name/LUID fields
+are retained but not used alone for attribution. Unrecognized/localized fields
+remain raw; messages are not parsed to guess an adapter. Exact GUID/MAC matches
+are associations, not causal proof; a baseline match is labelled historical with
+baseline run provenance and does not prove ownership at the event time. A MAC with
+no current match includes current inventory coverage so missing inventory is not
+mistaken for proof of absence. Contradictory identifiers are left separate.
+Event time, signed age relative to snapshot start, source interval and event-limit
+indicator are retained. There is no universal stale-event threshold. Unavailable
+logs, raw messages/XML and provider availability remain in the original checks;
+logs are never enabled. XML external entities/DTDs are prohibited.
+
+Schema **7** adds `DhcpSummary`, `SnapshotComparison`, `ExpectationAssessment`,
+`HistoricalEventContext`, and `ContextInputs`, plus request flags in `Parameters`.
+`ContextEvidence.ContractVersion=2` identifies the refined, still-unreleased schema-7
+derived contract. Existing checks, collection/probe status semantics, findings and logical map remain
+intact. Optional inputs retain their own collection status; they do not count as
+network operation outcomes. Derived sections are regenerated at each atomic
+checkpoint from available evidence; early checkpoints can be incomplete. Source
+references now resolve within this report, with explicit snapshot scope. No existing
+reports are modified. Schema-6 and earlier schema-7 baselines are normalized from
+raw `Checks`, so earlier derived serialization artifacts do not create changes.
+
+### Scoped evidence and readable comparisons
+
+Current source records stay in `/Checks` and are not copied into derived summaries.
+The selected baseline's six relevant check families (adapters, DHCP configuration,
+IP addresses, DNS servers, interface metrics, routes) are retained once under
+`/ContextEvidence/Baseline/Checks`, with run identity and normalized interface summaries.
+This bounds retained content by the consumed source families, not an arbitrary byte
+cap. Prior baseline comparisons, context stores and nested history are never imported.
+`ContextInputs` points to the retained baseline instead of embedding another copy.
+
+Interface source descriptors retain status, collection times, `Scope`, `RunId` and
+`EvidenceReferences`. Current source paths begin `/Checks/`; baseline source paths
+begin `/ContextEvidence/Baseline/Checks/`. Comparison `BeforeReference` and
+`AfterReference`, and historical event match references, contain `Scope`, `RunId`
+and `Path` pointing to reusable interface summaries in the appropriate context.
+Those summaries link to the actual retained records. Baseline paths must never be
+interpreted against current `/Checks`. HTML renders baseline records once and links
+to them; current links target the existing raw-check section.
+
+Compared with the earlier uncommitted schema-7 draft, embedded `BeforeSources`,
+`AfterSources`, per-summary source `Records`, and per-match source copies are removed
+in favor of these references. DNS/route source details remain in their raw checks,
+rather than duplicate inventory fields. Consumers of the draft should use the new
+references and `ContextEvidence.ContractVersion`. Schema 6 raw checks and existing
+findings remain unchanged. Missing derived lease scalars are JSON `null`; valid dates
+are offset strings. Empty address arrays are `[]`, with null elements removed.
+Availability continues to distinguish missing/unavailable/invalid/not-applicable data.
+
+HTML comparison starts with snapshot identities/times and outcome counts, followed
+by changed and lease-refreshed entries. Unchanged and not-assessed rows remain in
+JSON and separate collapsed HTML sections. Adapter aliases and indices are visible;
+the stable GUID remains in details. `BeforeContext`, `AfterContext` and `StateNote`
+retain link/connection state. Configuration changes with the same disconnected
+state on both sides explicitly say "Retained configuration changed on a disconnected
+adapter." State transitions and unknown state are shown instead of an active-fault
+claim. A zero assessed-change count does not erase coverage limitations.
+
+Historical summaries show time, event ID/provider, an escaped message excerpt,
+readable age and correlation result before expanded details. Message excerpts are
+presentation only; structured XML still controls matching. Exact `AgeSeconds`,
+identifiers, raw-message/XML references and limitations remain in JSON. Missing
+times/descriptions and future-dated events are explicit. Unavailable/incomplete
+inventory yields not assessed rather than confirmed absence; `NoCurrentMacMatch`
+is null when absence cannot be assessed. Historical matches remain scoped to the
+baseline run and do not establish adapter identity at the event timestamp.
+
+MAC-event absence assessment uses the successful **adapter inventory**, not every
+interface discovered in IP/DHCP/route evidence. A success with no adapter records
+is insufficient. Each inventoried MAC must be a usable 48-bit unicast identity
+represented in the correlated interface evidence. An empty/zero MAC is excluded
+only when structured `InterfaceType` identifies loopback (24), tunnel (131) or PPP
+(23), and `HardwareInterface` explicitly says false. These are built-in .NET
+NetworkInterfaceType values. Virtual status, disconnection, names and missing MACs
+alone do not establish non-applicability. Missing/malformed MACs on physical,
+Ethernet-like or unknown types still prevent an absence conclusion. IP-only
+interfaces without an adapter inventory record do not veto the assessment.
+
+Sufficient evidence with no match yields `No current identifier match` and, for
+MAC events, `NoCurrentMacMatch=true`. Insufficient evidence yields `Not assessed`,
+`NoCurrentMacMatch=null`, a structured `ReasonCode` and readable `Reason`; HTML
+shows the reason before raw details via `AssessmentReasons`. Missing, unsuccessful,
+empty and insufficient-identity inventories have distinct reason codes. Exact
+current matches remain explicit even if other identities are missing; multiple
+current matches remain ambiguous. Historical matches remain separately scoped to
+the baseline even when current absence is unassessable. These additive fields keep
+`ContextEvidence.ContractVersion=2`. None attributes a current fault or an unmatched
+old MAC to a particular adapter without historical evidence.

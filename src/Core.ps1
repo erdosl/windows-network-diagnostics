@@ -1,4 +1,5 @@
 . (Join-Path $PSScriptRoot 'LogicalNetwork.ps1')
+. (Join-Path $PSScriptRoot 'DhcpContext.ps1')
 . (Join-Path $PSScriptRoot 'Findings.ps1')
 
 function Get-AddressClassification {
@@ -173,6 +174,7 @@ function Write-DiagnosticReport {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][string]$OutputDirectory)
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force -ErrorAction Stop
     $Evidence | Add-Member NoteProperty LogicalNetwork (Get-LogicalNetworkModel $Evidence) -Force
+    Update-DhcpContext $Evidence
     $json = ConvertTo-Json -InputObject $Evidence -Depth 24
     $jsonPath = Join-Path $OutputDirectory 'evidence.json'
     $htmlPath = Join-Path $OutputDirectory 'summary.html'
@@ -194,6 +196,7 @@ function Write-DiagnosticReport {
         $null = $html.Append('</ul>')
     }
     $null = $html.Append((ConvertTo-LogicalNetworkHtml $Evidence.LogicalNetwork))
+    $null = $html.Append((ConvertTo-DhcpContextHtml $Evidence))
     $null = $html.Append('<h2>Interfaces</h2><p>Joined by interface index within this snapshot. Default routes are candidates, not proof of an active gateway. Empty lists may reflect missing source checks; see SourceStatus.</p>')
     $interfaces = @(Get-InterfaceSummary -Checks $Evidence.Checks)
     if ($interfaces.Count -eq 0) { $null = $html.Append('<p>No interface data available. See check statuses below.</p>') }
@@ -230,9 +233,11 @@ function Write-DiagnosticReport {
     }
     $null = $html.Append('</table>')
     $null = $html.Append('<h2>Checks and raw evidence</h2>')
+    $rawCheckIndex=0
     foreach ($check in $Evidence.Checks) {
         if ($check.Name -eq 'Neighbours') { $null = $html.Append('<details><summary>Raw neighbour-cache evidence</summary>') }
-        $null = $html.Append('<h3>' + (& $encode $check.Name) + ': ' + (& $encode $check.Status) + '</h3><pre>')
+        $null = $html.Append('<h3 id="'+(Get-ContextAnchor ('/Checks/'+$rawCheckIndex))+'">' + (& $encode $check.Name) + ': ' + (& $encode $check.Status) + '</h3><pre>')
+        $rawCheckIndex++
         $detail = ConvertTo-Json -InputObject $check -Depth 14
         $null = $html.Append((& $encode $detail) + '</pre>')
         if ($check.Name -eq 'Neighbours') { $null = $html.Append('</details>') }

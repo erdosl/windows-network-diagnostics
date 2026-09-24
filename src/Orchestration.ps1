@@ -1,6 +1,7 @@
 function Invoke-SnapshotRun {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$RepositoryRoot,
+        [string]$PreviousSnapshotPath, [string]$ExpectationsPath,
         [ValidateRange(1,168)][int]$LookbackHours = 24,
         [ValidateRange(1,1000)][int]$MaxEventsPerLog = 200,
         [ValidateRange(1,1000)][int]$MaxNicEvents = 200,
@@ -27,17 +28,18 @@ function Invoke-SnapshotRun {
     $outputRoot = $(if ($TestOutputRoot) { $TestOutputRoot } else { Join-Path $RepositoryRoot 'output' })
     $directory = Join-Path $outputRoot ("snapshot-$computer-$($identity.RunId)")
     $null = New-Item -Path $directory -ItemType Directory -ErrorAction Stop
-    $evidence = [pscustomobject]@{ SchemaVersion = 6; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    $evidence = [pscustomobject]@{ SchemaVersion = 7; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()
         PowerShellVersion = $PSVersionTable.PSVersion.ToString()
         Parameters = [pscustomobject]@{ LookbackHours = $LookbackHours; MaxEventsPerLog = $MaxEventsPerLog
+            PreviousSnapshotRequested = [bool]$PreviousSnapshotPath; ExpectationsRequested = [bool]$ExpectationsPath
             MaxNicEvents = $MaxNicEvents; MaxPowerEvents = $MaxPowerEvents; CheckTimeoutSeconds = $CheckTimeoutSeconds
             IncludeLegacyDnsTargets = [bool]$IncludeLegacyDnsTargets; IncludeConnectivityTests = [bool]$IncludeConnectivityTests; IncludeGatewayPing = [bool]$IncludeGatewayPing
             TcpDestinations = $TcpDestinations; TcpPort = $TcpPort; DnsQueryName = $DnsQueryName
             HttpsEndpoint = $HttpsEndpoint; ProbeTimeoutSeconds = $ProbeTimeoutSeconds; ProbeWorkerOverheadSeconds = $ProbeWorkerOverheadSeconds }
-        Checks = @(); Findings = Get-DiagnosticFindings @(); CollectionError = $null }
+        ContextInputs = @(); Checks = @(); Findings = Get-DiagnosticFindings @(); CollectionError = $null }
     $source = Join-Path $RepositoryRoot 'src'
     # This closure runs only in the parent. All worker inputs are serialized explicitly.
     $save = {
@@ -68,6 +70,22 @@ function Invoke-SnapshotRun {
     }
     try {
         & $save
+        foreach ($inputSpec in @(@('Baseline',$PreviousSnapshotPath),@('Expectations',$ExpectationsPath))) {
+            if (-not $inputSpec[1]) { continue }
+            # Resolve against the caller's working directory before entering a worker.
+            # Only bounded workers read optional input; failures cannot discard collection.
+            $evidence.PendingCheck = 'ContextInput:' + $inputSpec[0]
+            & $save
+            try {
+                $inputPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($inputSpec[1])
+                $definition = [pscustomobject]@{Name=$inputSpec[0];FunctionName='Read-ContextInput';Arguments=@{Path=$inputPath;Kind=$inputSpec[0];ComputerName=$identity.ComputerName}}
+                $evidence.ContextInputs += Invoke-BoundedCheck -Definition $definition -SourceDirectory $source -WorkingDirectory $directory -TimeoutSeconds $CheckTimeoutSeconds
+            } catch {
+                $evidence.ContextInputs += [pscustomobject]@{Name=$inputSpec[0];Status='Failed';Data=@();Error=[pscustomobject]@{Message=$_.Exception.Message;Id=$_.FullyQualifiedErrorId}}
+            }
+            $evidence.PendingCheck = $null
+            & $save
+        }
         foreach ($name in @('Windows','TimeZone','Adapters','NICDrivers','IPAddresses','DHCPAndGateways','DNSServers',
             'InterfacesAndMetrics','Routes','Neighbours','WiFiConnection','NICServices')) {
             & $execute ([pscustomobject]@{ Name = $name; FunctionName = 'Invoke-SnapshotCollector'; Arguments = @{ Name = $name } })

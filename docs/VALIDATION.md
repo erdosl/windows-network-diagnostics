@@ -1,3 +1,252 @@
+# Historical MAC correlation regression fix (2026-09-24)
+
+Focused change to the uncommitted 0.4.0/schema 7 implementation. ContractVersion
+remains 2; `ReasonCode`, `Reason` and event `AssessmentReasons` are additive.
+
+The regression was the revised blanket veto on any derived interface lacking
+`Values.MacAddress`. The derived set includes non-MAC and IP-only interfaces, so
+a successful adapter inventory could still become globally unassessable. Earlier
+logic had reported absence without that veto. The fix does not revert to treating
+inventory success alone as complete identity evidence: it examines actual adapter
+records, excludes only explicit nonphysical loopback/tunnel/PPP identities without
+MACs, and keeps missing, invalid, unknown-applicability or uncorrelatable relevant
+identity evidence unassessed. Names and localized messages are not classification
+or matching inputs. Raw checks and snapshot comparison matching are unchanged.
+
+Normal Windows PowerShell 5.1.19041.7725 file execution from the repository directory:
+
+| Command | Exit | Actual result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-EventCorrelation.ps1` | 0 | 27 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpContext.ps1` | 0 | 52 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpReview.ps1` | 0 | 41 assertions passed |
+
+**120 assertions passed**. `git diff --check` also passed. No execution-policy
+changes or inline workarounds were used. No restricted-agent failure occurred in
+these three suites. Full orchestration/live collection was not rerun for this
+focused change; previous restricted-agent atomic-replacement failures and the
+separate user-run normal-terminal successes remain documented below. No Windows
+11 validation or resolution of a real network fault is claimed.
+
+New synthetic cases cover sufficient unmatched MACs; explicit non-MAC virtual
+interfaces; unrelated IP-only records; missing/failed/unavailable/timed-out/empty
+inventory; genuinely missing, malformed or unknown-applicability identities;
+physical/nonphysical type conflicts; unique and duplicate exact matches;
+historical-only matches; retained historical matches with unavailable current
+inventory; no recognized XML identity; and structured/HTML consistency. The
+regression fixture has invented event IDs 1001/1003 evidence for an old MAC absent
+from both the current inventory and a post-recovery baseline. Its result is:
+
+```text
+CurrentInventoryStatus: Success
+CurrentMatches: []
+CorrelationSummary: No current identifier match
+Confidence: No current identifier match
+ReasonCode: NoCurrentIdentifierMatch
+NoCurrentMacMatch: true
+HistoricalMatches: []
+```
+
+The event IDs reproduce the reported event kinds; all adapter identities, MACs,
+messages and network addresses in fixtures are synthetic. Artifacts stay under
+ignored `output/tests/`; no real report was opened or modified for this fix.
+Actual hosts with incomplete relevant metadata will still correctly receive
+`Not assessed` with the reason visible in HTML. Matching is limited to available
+snapshot evidence; it does not prove ownership of a MAC at the historical event
+time or infer a current fault. No network activity, commit or push was performed.
+
+---
+
+# Schema-7 presentation/provenance refinement (2026-09-24)
+
+Collector remains **0.4.0 / schema 7**, uncommitted. The revised derived contract is
+identified by `ContextEvidence.ContractVersion=2`; the README documents removed
+embedded-source fields and scoped replacement references. Raw checks are unchanged.
+
+## User-run results, preceding this refinement
+
+The user confirmed successful normal Windows PowerShell execution of the DHCP
+context and orchestration suites and a passive baseline-comparison run. These are
+user-run successes for the preceding uncommitted implementation, separate from
+agent sandbox results. The supplied review did not include exact assertion counts
+or a host-version transcript; no additional counts or Windows 11 validation are
+inferred. No real report contents or identifiers are recorded here.
+
+## Agent-run results after refinement
+
+Normal `powershell.exe -NoProfile -File` execution, Windows 10 build 19045,
+PowerShell **5.1.19041.7725**, non-elevated; CurrentUser RemoteSigned, all other
+policy scopes Undefined. No policy changes or bypasses. All commands below were
+run from the repository directory, with synthetic artifacts under `output/tests/`.
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpReview.ps1` | 0 | 41 assertions |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpContext.ps1` | 0 | 52 assertions |
+| `powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1` | 0 | 42 assertions |
+| `powershell.exe -NoProfile -File .\tests\Test-AdapterApipa.ps1` | 0 | 26 assertions |
+| `powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1` | 0 | 94 assertions |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1` | 1 | Existing atomic-replacement restriction persists in agent sandbox |
+
+**255 assertions passed** across five suites. The orchestration failure remains
+`Exception calling "Replace" with "3" argument(s): "Access to the path is denied."`
+at `src/State.ps1:12`, `FullyQualifiedErrorId: UnauthorizedAccessException`.
+It does not contradict the user's normal-terminal orchestration success. No
+attempt was made to bypass atomic replacement or weaken that test. A complete
+agent-run passive comparison remains unverified; no new live probes were run.
+Windows 11 remains untested.
+
+The new suite verifies JSON nulls and empty arrays after round trip, explicit date
+offsets, invalid/not-applicable availability, schema-6 normalization, raw evidence
+preservation, current/baseline reference resolution, shared references, nested
+history exclusion, stable size on repeated derivation, HTML ordering/counts,
+disconnected/transition/unknown-state context, aliases/GUIDs, event descriptions,
+escaping, future/missing timestamps, equivalent instants expressed with different
+offsets, and ambiguous/unavailable-inventory correlations.
+
+The serialization cause was reproduced in a normal PowerShell 5.1 file harness:
+an empty conditional subexpression assigned inside a PSCustomObject had reference
+identity with `System.Management.Automation.Internal.AutomationNull.Value` and
+serialized as `{"Date":{}}`. An explicitly initialized `$null` scalar serialized
+as `{"Date":null}`. The fix changes object construction; no serialized JSON string
+replacement is used. Address arrays filter null elements before serialization.
+
+## Reproducible synthetic size measurement
+
+`tests/fixtures/DhcpReview.ps1` defines twelve synthetic adapters, one configured
+gateway change on a disconnected adapter, two advanced lease timestamps and twelve
+structured events. Fixed synthetic run IDs, timestamps and source payloads make
+the same fixture reusable. The pre-refinement source was copied, without edits,
+to ignored `output/tests/review-before/src/` before implementation.
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Measure-DhcpReport.ps1 -SourceRoot .\output\tests\review-before
+powershell.exe -NoProfile -File .\tests\Measure-DhcpReport.ps1
+```
+
+Both measurement commands exited 0 and wrote fresh reports under `output/tests/`.
+The first command uses the preserved local pre-refinement copy; on another checkout,
+`-SourceRoot` must point to a saved copy of that implementation. The fixture and
+measurement script are tracked source; the old implementation copy and reports are
+local ignored artifacts.
+
+| Artifact | Before (bytes) | After (bytes) | Reduction |
+| --- | ---: | ---: | ---: |
+| JSON | 4,972,870 | 1,212,261 | 75.6% |
+| HTML | 3,949,567 | 338,573 | 91.4% |
+
+The reduction comes from eliminating repeated source-record copies per comparison
+row/correlation and rendering reusable raw evidence once, not truncating evidence
+or imposing a report-size cap. The previous 8 MiB input cap is removed: input reads
+remain inside the existing bounded worker; retained baseline content is limited to
+the six consumed source-check families, with no recursive history. Large inputs
+can still time out or exhaust worker resources and are reported as input failures.
+
+Manual normal-terminal checks and a fresh passive comparison:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-DhcpReview.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -PreviousSnapshotPath '.\output\prior snapshot\evidence.json'
+$LASTEXITCODE
+```
+
+Replace the baseline path with a same-host schema-6/7 evidence file. Add
+`-ExpectationsPath '.\output\expectations.json'` only when supplying expectations.
+These commands keep active probes disabled. No original real reports were edited,
+and no commit or push was performed.
+
+---
+
+# DHCP context review (0.4.0 / schema 7, agent-run)
+
+2026-09-24: normal `powershell.exe -NoProfile -File` execution on Windows 10
+build 19045, Windows PowerShell **5.1.19041.7725**, non-elevated. The dedicated
+Windows PowerShell host check reported CurrentUser **RemoteSigned**, with all
+other execution-policy scopes Undefined. No policy changes or bypasses were used.
+Windows 11 remains untested. No external probes, DHCP discovery, packet capture,
+network changes, commits or pushes were performed.
+
+Commands run from the repository directory:
+
+| Command | Exit | Actual result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpContext.ps1` | 0 | 52 assertions passed on the final focused run |
+| `powershell.exe -NoProfile -File .\tests\Test-Snapshot.ps1` | 0 | 42 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-AdapterApipa.ps1` | 0 | 26 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-LogicalNetwork.ps1` | 0 | 94 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1` | 1 | Atomic replacement denied; full orchestration remains unverified |
+| `powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1` | 1 | Atomic replacement denied; full suite remains unverified |
+
+The four passing suites total **214 assertions**. The new focused suite tests
+schema-6 baseline loading in a real bounded worker, selected-server coverage
+limits despite successful client probes, per-interface provenance, lease math
+and serialized dates, stable-GUID MAC changes, lease refresh, DNS order, omitted
+versus explicit expectations, per-field overrides, disconnected/missing/sentinel
+values, conflicting/duplicate GUIDs, malformed/incompatible inputs, historical
+old-MAC correlation, event XML restrictions, future-baseline rejection, optional
+worker-timeout presentation, raw evidence preservation and HTML escaping.
+The orchestration suite uses mocked collectors but real bounded optional-input
+workers and real atomic checkpoints. It is intentionally not weakened to avoid
+the storage restriction.
+
+Both incomplete suites returned this error at `src/State.ps1:12`:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+CategoryInfo: NotSpecified: (:) [], ParentContainsErrorRecordException
+FullyQualifiedErrorId: UnauthorizedAccessException
+```
+
+A fresh copy of the actual entry point and `src/` was placed under ignored
+`output\tests\context validation\`. With working directory `output\`, normal
+`powershell.exe -NoProfile -File` calls using absolute quoted paths ran:
+
+- `Test-ContextHost.ps1`: exit 0, recorded the host details above and successfully
+  dot-sourced the copied Core/State modules from the path containing spaces.
+- `Collect-NetworkDiagnostics.ps1 -CheckTimeoutSeconds 5`: exit 1, the same
+  atomic-replacement error in the copied State module. Script loading succeeded,
+  but **full passive entry-point collection is unverified** in this sandbox.
+
+This was real file execution, not inline execution standing in for end-to-end
+validation. The focused report test successfully created a new synthetic report;
+that does not prove replacement of existing checkpoints works in this context.
+All new test/copy artifacts are under ignored `output/tests/`; no original reports
+were changed. Input comparison is limited to GUID identities and schemas 6/7,
+with an 8 MiB input cap. Event correlation recognizes explicit named XML fields;
+unrecognized identifiers remain raw. No LAN-wide DHCP assessment or actual fault
+resolution is claimed. Historical user results below apply to prior versions,
+not this release.
+
+Manual validation from the repository directory in a normal Windows PowerShell
+terminal (record `$LASTEXITCODE` after each command):
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-DhcpContext.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1
+$LASTEXITCODE
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1
+$LASTEXITCODE
+```
+
+To validate optional inputs, replace the baseline path with a previous same-host
+schema-6/7 snapshot and create the expectations file using the README format:
+
+```powershell
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -PreviousSnapshotPath '.\output\prior snapshot\evidence.json' -ExpectationsPath '.\output\expectations.json'
+$LASTEXITCODE
+```
+
+These commands leave active probes disabled. Review the new JSON/HTML sections;
+do not add the resulting diagnostics or real identifiers to tracked documentation.
+
+---
+
 # Pre-commit documentation review
 
 2026-09-23: clarified generated no-match records versus original provider errors.

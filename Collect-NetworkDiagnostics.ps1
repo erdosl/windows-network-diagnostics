@@ -1,6 +1,8 @@
 #requires -Version 5.1
 [CmdletBinding()]
 param(
+    [string]$PreviousSnapshotPath,
+    [string]$ExpectationsPath,
     [ValidateRange(1,168)][int]$LookbackHours = 24,
     [ValidateRange(1,1000)][int]$MaxEventsPerLog = 200,
     [ValidateRange(1,1000)][int]$MaxNicEvents = 200,
@@ -31,6 +33,8 @@ Format-DnsConsoleReport $paths.Evidence.Checks -Width ([Math]::Min(1000, $consol
 $map = $paths.Evidence.LogicalNetwork
 Write-Host ("Logical map: {0} interfaces, {1} interface-scoped subnets, {2} neighbour observations ({3} eligible endpoint observations, not physical devices)." -f $map.Counts.Interfaces,$map.Counts.Subnets,$map.Counts.NeighbourObservations,$map.Counts.EligibleEndpointObservations)
 Write-Host 'Physical Layer 2 paths unknown; structured Wi-Fi association unavailable.'
+Write-Host 'Competing DHCP servers: not assessed.'
+Write-Host ("Snapshot comparison: {0}; expectations: {1}. See HTML for details." -f $paths.Evidence.SnapshotComparison.Status,$paths.Evidence.ExpectationAssessment.Status)
 $gaps = @($map.Coverage | Where-Object { $_.Status -ne 'Success' })
 Write-Host ("Coverage: {0} unavailable, failed, uncollected or unknown sources; see HTML for details." -f $gaps.Count)
 Write-Host "JSON evidence: $($paths.JsonPath)"
