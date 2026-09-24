@@ -41,17 +41,68 @@ function Get-ContextIdentity {
 
 function Get-ContextSource {
     param($Evidence,[string]$Name,$Index)
-    $selected = @(); $refs = @(); $status = 'NotCollected'; $start = $null; $end = $null
+    $selected = @(); $refs = @(); $checkRefs=@(); $status = 'NotCollected'; $start = $null; $end = $null; $enumerationValid=$false
     for ($ci=0; $ci -lt @($Evidence.Checks).Count; $ci++) {
         $check = $Evidence.Checks[$ci]
         if ($check.Name -ne $Name) { continue }
+        $checkRefs += "/Checks/$ci"
         $status = $check.Status; $start = $check.StartedAt; $end = $check.CompletedAt
         if ($status -ne 'Success') { continue }
+        $enumerationValid=$check.Data -is [array] -and @($check.Data | Where-Object {$null -eq $_ -or $null -eq $_.InterfaceIndex}).Count -eq 0
         for ($di=0; $di -lt @($check.Data).Count; $di++) {
             if ($check.Data[$di].InterfaceIndex -eq $Index) { $selected += $check.Data[$di]; $refs += "/Checks/$ci/Data/$di" }
         }
     }
-    [pscustomobject]@{CheckName=$Name;Status=$status;MatchedRecords=$selected.Count;StartedAt=$start;CompletedAt=$end;EvidenceReferences=$refs;Records=$selected}
+    if($checkRefs.Count -gt 1){$status='Ambiguous';$enumerationValid=$false}
+    [pscustomobject]@{CheckName=$Name;Status=$status;MatchedRecords=$selected.Count;StartedAt=$start;CompletedAt=$end;EvidenceReferences=$refs;CheckReferences=$checkRefs;EnumerationValid=$enumerationValid;Records=$selected}
+}
+
+function Get-EmptyConfigurationAvailability {
+    param($Sources,[string]$Field,$Dhcp,[bool]$Complete,[bool]$KnownAdapter)
+    if(-not $Complete){return 'Incomplete'}
+    if(-not $KnownAdapter){return 'Ambiguous'}
+    if($Field -eq 'IPv4'){
+        if($Sources.IPAddresses.Status -ne 'Success'){return $Sources.IPAddresses.Status}
+        if(-not $Sources.IPAddresses.EnumerationValid){return 'Invalid'}
+        # Get-NetIPAddress enumerates configured addresses, not an adapter object.
+        # No rows for a known adapter is evidence of no addresses, unlike DNS rows.
+        return 'ObservedEmpty'
+    }
+    if($Sources.DHCPAndGateways.Status -ne 'Success'){return $Sources.DHCPAndGateways.Status}
+    if(-not $Sources.DHCPAndGateways.EnumerationValid){return 'Invalid'}
+    if($Sources.DHCPAndGateways.MatchedRecords -gt 1){return 'Ambiguous'}
+    if($Sources.DHCPAndGateways.MatchedRecords -eq 0){return 'No matching record'}
+    $property='DefaultIPGateway';$fallback=$Sources.Routes
+    if($Field -eq 'DnsServers'){$property='DNSServerSearchOrder';$fallback=$Sources.DNSServers}
+    # Null in the primary field is not proof. Independent, complete fallback
+    # evidence must establish absence too. Absent schema fields remain unknown.
+    if(-not $Dhcp.PSObject.Properties[$property]){return 'Missing'}
+    if($null -ne $Dhcp.$property -and ($Dhcp.$property -isnot [array] -or @($Dhcp.$property).Count -gt 0)){return 'Invalid'}
+    if($fallback.Status -ne 'Success'){return $fallback.Status}
+    if(-not $fallback.EnumerationValid){return 'Invalid'}
+    if($Field -eq 'Gateways'){
+        foreach($route in $fallback.Records){
+            $prefix=[string]$route.DestinationPrefix -split '/';$network=$null;$length=0
+            if($prefix.Count -ne 2 -or -not [Net.IPAddress]::TryParse($prefix[0],[ref]$network) -or -not [int]::TryParse($prefix[1],[ref]$length)){return 'Invalid'}
+            $maxLength=128;if($network.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork){$maxLength=32}
+            if($length -lt 0 -or $length -gt $maxLength){return 'Invalid'}
+            if($route.DestinationPrefix -in @('0.0.0.0/0','::/0') -and $route.NextHop -notin @('0.0.0.0','::')){return 'Invalid'}
+        }
+        return 'ObservedEmpty'
+    }
+    # Get-DnsClientServerAddress supplies per-family interface objects. No object
+    # (or a null ServerAddresses property) does not establish an empty DNS list.
+    if($fallback.MatchedRecords -eq 0){return 'No matching record'}
+    $families=@()
+    foreach($row in $fallback.Records){
+        $family=Get-NetworkDisplayLabel AddressFamily $row.AddressFamily
+        if($family -notin @('IPv4','IPv6')){return 'Invalid'}
+        if($family -in $families){return 'Ambiguous'}
+        $families+=$family
+        if($row.ServerAddresses -isnot [array]){return 'Missing'}
+        if($row.ServerAddresses.Count -ne 0){return 'Invalid'}
+    }
+    'ObservedEmpty'
 }
 
 function Get-DhcpInterfaceContext {
@@ -65,10 +116,11 @@ function Get-DhcpInterfaceContext {
         $adapter = $null; $dhcp = $null
         if ($a.Count -eq 1) { $adapter = $a[0] }
         if ($d.Count -eq 1) { $dhcp = $d[0] }
-        $ids = @(@((Get-ContextIdentity $adapter.InterfaceGuid),(Get-ContextIdentity $dhcp.SettingID)) | Where-Object { $_ } | Select-Object -Unique)
+        $ids = @(@($a | ForEach-Object {Get-ContextIdentity $_.InterfaceGuid})+@($d | ForEach-Object {Get-ContextIdentity $_.SettingID}) | Where-Object { $_ } | Select-Object -Unique)
         $id = $null; $basis = 'No stable identity; no cross-snapshot fallback'
         if ($ids.Count -eq 1) { $id = $ids[0]; $basis = 'InterfaceGuid/SettingID, joined within snapshot by interface index' }
         elseif ($ids.Count -gt 1) { $basis = 'Ambiguous: InterfaceGuid and SettingID disagree' }
+        if($a.Count -gt 1 -or $sources.Adapters.Status -eq 'Ambiguous' -or $sources.DHCPAndGateways.Status -eq 'Ambiguous'){$id=$null;$basis='Ambiguous: multiple source records/checks for this interface'}
         $kind = 'Unknown'
         if ($adapter.HardwareInterface -is [bool]) { $kind = $(if ($adapter.HardwareInterface) {'Physical'} else {'Virtual/software'}) }
         $ipif = @($sources.InterfacesAndMetrics.Records | Where-Object { [string]$_.AddressFamily -in @('2','IPv4','InterNetwork') })
@@ -123,6 +175,19 @@ function Get-DhcpInterfaceContext {
             if ($field -eq 'Gateways') { $source = $gatewaySource }
             $availability[$field] = $(if ($sources[$source].Status -ne 'Success') { $sources[$source].Status } elseif ($sources[$source].MatchedRecords -eq 0) { 'No matching record' } elseif ($null -eq $values[$field] -or @($values[$field]).Count -eq 0 -or [string]$values[$field] -eq '') { 'Missing' } else { 'Available' })
         }
+        foreach($field in @('IPv4','Gateways','DnsServers')){
+            if(@($values[$field]).Count -eq 0){
+                $availability[$field]=Get-EmptyConfigurationAvailability $sources $field $dhcp ($Evidence.CollectionStatus -eq 'Complete') ($a.Count -eq 1 -and [bool]$id -and $sources.Adapters.Status -eq 'Success')
+            } elseif($availability[$field] -eq 'Available'){
+                foreach($value in $values[$field]){
+                    $address=[string]$value;$ip=$null
+                    if($field -eq 'IPv4'){$address=($address -split '/')[0]}
+                    if(-not [Net.IPAddress]::TryParse($address,[ref]$ip)){$availability[$field]='Invalid';continue}
+                    if($field -eq 'IPv4' -and ($ip.AddressFamily -ne [Net.Sockets.AddressFamily]::InterNetwork -or [string]$value -notmatch '/(\d|[12]\d|3[0-2])$')){$availability[$field]='Invalid'}
+                }
+                if($field -in @('Gateways','DnsServers') -and $d.Count -gt 1){$availability[$field]='Ambiguous'}
+            }
+        }
         foreach($dateField in @(@('LeaseObtained','DHCPLeaseObtained'),@('LeaseExpires','DHCPLeaseExpires'))) {
             if($sources.DHCPAndGateways.Status -eq 'Success' -and $d.Count -eq 1) {
                 if($dhcp.DHCPEnabled -eq $false){$availability[$dateField[0]]='Not applicable'}
@@ -138,7 +203,7 @@ function Get-DhcpInterfaceContext {
         foreach($name in $names) {
             $s=$sources[$name]
             $sources[$name]=[pscustomobject]@{CheckName=$s.CheckName;Status=$s.Status;MatchedRecords=$s.MatchedRecords;StartedAt=$s.StartedAt;CompletedAt=$s.CompletedAt;Scope=$Scope;RunId=$Evidence.RunId
-                EvidenceReferences=@($s.EvidenceReferences | ForEach-Object {$ReferenceRoot+$_})}
+                EvidenceReferences=@($s.EvidenceReferences | ForEach-Object {$ReferenceRoot+$_});CheckReferences=@($s.CheckReferences | ForEach-Object {$ReferenceRoot+$_});EnumerationValid=$s.EnumerationValid}
         }
         [pscustomobject]@{StableIdentity=$id;IdentityBasis=$basis;InterfaceIndex=$index;Alias=$adapter.Name;Description=$adapter.InterfaceDescription;Kind=$kind
             Disconnected=$disconnected;ConfigurationNote=$(if($disconnected){'Retained configuration on a disconnected adapter.'}else{'Configured values; gateway/DNS origin is not established.'})
@@ -169,13 +234,13 @@ function Read-ContextInput {
     if ($file.PSIsContainer) { throw 'Optional input must be a JSON file.' }
     $inputObject = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     if ($Kind -eq 'Baseline') {
-        if ($inputObject.SchemaVersion -notin @(6,7) -or $inputObject.Mode -ne 'Snapshot' -or -not $inputObject.RunId -or $null -eq $inputObject.Checks) { throw 'Unsupported or malformed baseline; expected snapshot schema 6 or 7.' }
+        if ($inputObject.SchemaVersion -notin @(6,7,8) -or $inputObject.Mode -ne 'Snapshot' -or -not $inputObject.RunId -or $null -eq $inputObject.Checks) { throw 'Unsupported or malformed baseline; expected snapshot schema 6, 7 or 8.' }
         if (-not $ComputerName -or $inputObject.ComputerName -ne $ComputerName) { throw 'Baseline computer identity is incompatible.' }
         if (-not (ConvertTo-ContextTime $inputObject.StartedAt)) { throw 'Baseline start timestamp is invalid or lacks an offset.' }
         # Retain only the six check families consumed by these features. Never
         # import the baseline's derived contexts, comparisons or older history.
         $selectedChecks=@($inputObject.Checks | Where-Object Name -in @('Adapters','DHCPAndGateways','IPAddresses','DNSServers','InterfacesAndMetrics','Routes'))
-        $selection=[pscustomobject]@{RunId=$inputObject.RunId;Checks=$selectedChecks}
+        $selection=[pscustomobject]@{RunId=$inputObject.RunId;CollectionStatus=$inputObject.CollectionStatus;Checks=$selectedChecks}
         return [pscustomobject]@{Identity=($inputObject | Select-Object ComputerName,RunId,StartedAt,CompletedAt,CollectionStatus,SchemaVersion);AdapterInventoryStatus=@($selectedChecks | Where-Object Name -eq 'Adapters' | Select-Object -Last 1).Status;Checks=$selectedChecks;Interfaces=@(Get-DhcpInterfaceContext $selection Baseline '/ContextEvidence/Baseline')}
     }
     if ($inputObject.Version -ne 1) { throw 'Expectations Version must be 1.' }
@@ -209,10 +274,40 @@ function Get-ComparisonAdapterState {
     [pscustomobject]@{Alias=$Interface.Alias;InterfaceIndex=$Interface.InterfaceIndex;LinkState=$Interface.Values.LinkState;ConnectionState=@($Interface.Values.ConnectionState | Where-Object {$null -ne $_});State=$state}
 }
 
+function Get-AdapterPresenceCoverage {
+    param($Checks,$Interfaces,[string]$CollectionStatus,[string]$Scope,[string]$RunId)
+    $inventory=@($Checks | Where-Object Name -eq 'Adapters')
+    $reference=$null
+    if($inventory.Count -eq 1){
+        $path='/Checks/'+[array]::IndexOf(@($Checks),$inventory[0])
+        if($Scope -eq 'Baseline'){$path='/ContextEvidence/Baseline'+$path}
+        $reference=[pscustomobject]@{Scope=$Scope;RunId=$RunId;Path=$path}
+    }
+    $reason='SnapshotIncomplete';$detail='Snapshot is incomplete; adapter absence cannot be established.';$known=@()
+    if($CollectionStatus -eq 'Complete'){
+        $reason='InventoryUnavailable';$detail='One successful adapter inventory is required.'
+        if($inventory.Count -eq 1 -and $inventory[0].Status -eq 'Success'){
+            $reason='IdentityEvidenceInsufficient';$detail='An inventoried adapter has missing, conflicting, duplicate or uncorrelatable stable identity evidence.'
+            $valid=$inventory[0].Data -is [array]
+            foreach($adapter in $inventory[0].Data){
+                $rows=@($Interfaces | Where-Object {$null -ne $adapter.InterfaceIndex -and $_.InterfaceIndex -eq $adapter.InterfaceIndex})
+                if($rows.Count -ne 1 -or -not $rows[0].StableIdentity -or $rows[0].Sources.Adapters.MatchedRecords -ne 1 -or $rows[0].Sources.DHCPAndGateways.MatchedRecords -gt 1){$valid=$false;continue}
+                $id=$rows[0].StableIdentity
+                if($id -in $known){$valid=$false}
+                $known+=$id
+            }
+            if($valid){$reason='CompleteIdentifiedInventory';$detail='Complete successful adapter inventory with unique stable identities; non-inventory IP-only records do not affect absence assessment.'}
+        }
+    }
+    [pscustomobject]@{Sufficient=($reason -eq 'CompleteIdentifiedInventory');ReasonCode=$reason;Detail=$detail;Identities=$known;Reference=$reference}
+}
+
 function Compare-DhcpContext {
     param($Current,$Baseline,$Evidence)
     $changes = @(); $matched = @()
-    $completeInventories = $Baseline.Identity.CollectionStatus -eq 'Complete' -and $Baseline.AdapterInventoryStatus -eq 'Success' -and $Evidence.CollectionStatus -eq 'Complete' -and @($Evidence.Checks | Where-Object { $_.Name -eq 'Adapters' -and $_.Status -eq 'Success' }).Count -gt 0
+    $baselineCoverage=Get-AdapterPresenceCoverage $Baseline.Checks $Baseline.Interfaces $Baseline.Identity.CollectionStatus Baseline $Baseline.Identity.RunId
+    $currentCoverage=Get-AdapterPresenceCoverage $Evidence.Checks $Current $Evidence.CollectionStatus Current $Evidence.RunId
+    $presenceDetail='Baseline: '+$baselineCoverage.Detail+' Current: '+$currentCoverage.Detail
     foreach ($now in $Current) {
         $old = @($Baseline.Interfaces | Where-Object { $now.StableIdentity -and $_.StableIdentity -eq $now.StableIdentity })
         $duplicate = @($Current | Where-Object { $now.StableIdentity -and $_.StableIdentity -eq $now.StableIdentity }).Count -gt 1
@@ -220,13 +315,13 @@ function Compare-DhcpContext {
             $changes += [pscustomobject]@{Identity=$now.StableIdentity;InterfaceIndex=$now.InterfaceIndex;Field='Adapter';Outcome='Not assessed';Detail='Missing or ambiguous stable identity; no alias/MAC/index fallback.'}; continue
         }
         if ($old.Count -eq 0) {
-            $known = $completeInventories -and @($Baseline.Interfaces | Where-Object { -not $_.StableIdentity }).Count -eq 0
-            $changes += [pscustomobject]@{Identity=$now.StableIdentity;Field='Adapter';Outcome=$(if($known){'Appeared'}else{'Not assessed'});Detail='Presence in two snapshots only; incomplete or unidentified baseline limits absence evidence.'}; continue
+            $known = $baselineCoverage.Sufficient -and $currentCoverage.Sufficient -and $now.StableIdentity -in $currentCoverage.Identities
+            $changes += [pscustomobject]@{Identity=$now.StableIdentity;Field='Adapter';Outcome=$(if($known){'Appeared'}else{'Not assessed'});Detail=$presenceDetail;BeforePresenceReason=$baselineCoverage.ReasonCode;AfterPresenceReason=$currentCoverage.ReasonCode}; continue
         }
         $matched += $now.StableIdentity
         foreach ($field in $now.Values.PSObject.Properties.Name) {
             $before = $old[0].Values.$field; $after = $now.Values.$field
-            $available = ($old[0].Availability.$field -eq 'Available' -and $now.Availability.$field -eq 'Available')
+            $available = ($old[0].Availability.$field -in @('Available','ObservedEmpty') -and $now.Availability.$field -in @('Available','ObservedEmpty'))
             $left = @($before); $right = @($after)
             if ($field -in @('IPv4','Gateways','ConnectionState')) { $left = @($left | Sort-Object -Unique); $right = @($right | Sort-Object -Unique) }
             $equal = (ConvertTo-Json -InputObject $left -Compress -Depth 5) -ceq (ConvertTo-Json -InputObject $right -Compress -Depth 5)
@@ -242,11 +337,15 @@ function Compare-DhcpContext {
     }
     foreach ($old in $Baseline.Interfaces) {
         if ($old.StableIdentity -and $old.StableIdentity -notin $matched -and $old.StableIdentity -notin @($Current.StableIdentity)) {
-            $known = $completeInventories -and @($Baseline.Interfaces | Where-Object StableIdentity -eq $old.StableIdentity).Count -eq 1 -and @($Current | Where-Object { -not $_.StableIdentity }).Count -eq 0
-            $changes += [pscustomobject]@{Identity=$old.StableIdentity;Field='Adapter';Outcome=$(if($known){'Disappeared'}else{'Not assessed'});Detail='Absence requires complete current adapter inventory.'}
+            $known = $baselineCoverage.Sufficient -and $currentCoverage.Sufficient -and @($Baseline.Interfaces | Where-Object StableIdentity -eq $old.StableIdentity).Count -eq 1 -and $old.StableIdentity -in $baselineCoverage.Identities
+            $changes += [pscustomobject]@{Identity=$old.StableIdentity;Field='Adapter';Outcome=$(if($known){'Disappeared'}else{'Not assessed'});Detail=$presenceDetail;BeforePresenceReason=$baselineCoverage.ReasonCode;AfterPresenceReason=$currentCoverage.ReasonCode}
         }
     }
     foreach($change in $changes) {
+        if($change.Field -eq 'Adapter'){
+            $change | Add-Member NoteProperty BeforeInventoryReference $baselineCoverage.Reference -Force
+            $change | Add-Member NoteProperty AfterInventoryReference $currentCoverage.Reference -Force
+        }
         $beforeRows=@($Baseline.Interfaces | Where-Object {$change.Identity -and $_.StableIdentity -eq $change.Identity})
         $afterRows=@($Current | Where-Object {$change.Identity -and $_.StableIdentity -eq $change.Identity})
         $beforeItem=$null;$afterItem=$null;$beforeRef=$null;$afterRef=$null
@@ -438,7 +537,7 @@ function Update-DhcpContext {
         }
     }
     $Evidence | Add-Member NoteProperty DhcpSummary ([pscustomobject]@{CompetingDhcpServers='Not assessed';Limitation='One selected DHCP server and successful client probes do not establish that only one DHCP server exists.';Interfaces=$interfaces}) -Force
-    $Evidence | Add-Member NoteProperty ContextEvidence ([pscustomobject]@{ContractVersion=2;Current=[pscustomobject]@{Identity=($Evidence | Select-Object ComputerName,RunId,StartedAt,CompletedAt,CollectionStatus);ChecksPath='/Checks'};Baseline=$storedBaseline}) -Force
+    $Evidence | Add-Member NoteProperty ContextEvidence ([pscustomobject]@{ContractVersion=3;Current=[pscustomobject]@{Identity=($Evidence | Select-Object ComputerName,RunId,StartedAt,CompletedAt,CollectionStatus);ChecksPath='/Checks'};Baseline=$storedBaseline}) -Force
     $Evidence | Add-Member NoteProperty SnapshotComparison $comparison -Force
     $Evidence | Add-Member NoteProperty ExpectationAssessment $assessment -Force
     $Evidence | Add-Member NoteProperty HistoricalEventContext (@(Get-HistoricalEventContext $Evidence $interfaces $baseline)) -Force
@@ -491,7 +590,7 @@ function ConvertTo-ComparisonRowsHtml {
         $null=$html.Append('<tr>')
         foreach($value in @($label,$field,$row.Outcome,$beforeValue,$afterValue)){$null=$html.Append('<td>'+(& $encode $value)+'</td>')}
         $null=$html.Append('<td>'+(& $encode $row.StateNote)+'<details><summary>Identity and state details</summary><p>Stable GUID: '+(& $encode $row.Identity)+'</p><p>'+(& $encode $row.Detail)+'</p><p>Baseline link/connection: '+(& $encode ($row.BeforeContext.LinkState+' / '+(@($row.BeforeContext.ConnectionState) -join ', ')))+'</p><p>Current link/connection: '+(& $encode ($row.AfterContext.LinkState+' / '+(@($row.AfterContext.ConnectionState) -join ', ')))+'</p>')
-        $null=$html.Append('<p>Availability: '+(& $encode ($row.BeforeAvailability+' -> '+$row.AfterAvailability))+'</p>'+(ConvertTo-ContextLink $row.BeforeReference 'Baseline adapter evidence')+' '+(ConvertTo-ContextLink $row.AfterReference 'Current adapter evidence')+'</details></td></tr>')
+        $null=$html.Append('<p>Availability: '+(& $encode ($row.BeforeAvailability+' -> '+$row.AfterAvailability))+'</p>'+(ConvertTo-ContextLink $row.BeforeReference 'Baseline adapter evidence')+' '+(ConvertTo-ContextLink $row.AfterReference 'Current adapter evidence')+' '+(ConvertTo-ContextLink $row.BeforeInventoryReference 'Baseline inventory coverage')+' '+(ConvertTo-ContextLink $row.AfterInventoryReference 'Current inventory coverage')+'</details></td></tr>')
     }
     $null=$html.Append('</table>');$html.ToString()
 }
@@ -506,7 +605,7 @@ function ConvertTo-InterfaceContextHtml {
     foreach($p in $Interface.Sources.PSObject.Properties){
         $source=$p.Value
         $null=$html.Append('<p>'+(& $encode ($source.Scope+' '+$source.CheckName+': '+$source.Status+'; '+$source.StartedAt+' to '+$source.CompletedAt))+' ')
-        foreach($ref in $source.EvidenceReferences){$null=$html.Append((ConvertTo-ContextLink ([pscustomobject]@{Path=$ref}) $ref)+' ')}
+        foreach($ref in @($source.EvidenceReferences)+@($source.CheckReferences)){$null=$html.Append((ConvertTo-ContextLink ([pscustomobject]@{Path=$ref}) $ref)+' ')}
         $null=$html.Append('</p>')
     }
     $null=$html.Append('<p>'+(& $encode $Interface.LeaseTimeNote)+'</p></details></section>');$html.ToString()

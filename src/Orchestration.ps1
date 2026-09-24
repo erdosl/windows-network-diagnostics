@@ -28,7 +28,7 @@ function Invoke-SnapshotRun {
     $outputRoot = $(if ($TestOutputRoot) { $TestOutputRoot } else { Join-Path $RepositoryRoot 'output' })
     $directory = Join-Path $outputRoot ("snapshot-$computer-$($identity.RunId)")
     $null = New-Item -Path $directory -ItemType Directory -ErrorAction Stop
-    $evidence = [pscustomobject]@{ SchemaVersion = 7; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    $evidence = [pscustomobject]@{ SchemaVersion = 8; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()

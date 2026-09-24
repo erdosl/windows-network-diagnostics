@@ -1,3 +1,123 @@
+# User-run validation: 0.4.1 / schema 8 / contract 3
+
+The user supplied a normal `powershell.exe -NoProfile -File` terminal transcript
+reporting **182 assertions passed** across five suites on Windows PowerShell
+**5.1.19041.7725**:
+
+| Suite | Reported result |
+| --- | --- |
+| Test-SnapshotComparison.ps1 | 54 passed, 0 failed |
+| Test-DhcpContext.ps1 | 52 passed |
+| Test-DhcpReview.ps1 | 41 passed |
+| Test-EventCorrelation.ps1 | 27 passed |
+| Test-DhcpOrchestration.ps1 | 8 passed |
+
+The pasted review-suite command contains an extra separator before `.ps1`; its
+following output reports the expected 41-assertion DHCP review pass. The table
+identifies that reported suite without claiming the pasted command spelling was
+independently reproduced. Numeric process exit codes were not included in this
+transcript and are not inferred.
+
+This confirms a user-run orchestration-suite pass, distinct from the earlier
+agent sandbox atomic-replacement failure below. It does not establish a new live
+collector comparison run, Windows 11 validation, or resolution of a network fault.
+No personal paths or diagnostic identifiers are retained here. No tests were
+rerun merely to record this transcript.
+
+---
+
+# Snapshot comparison follow-up (0.4.1 / schema 8 / contract 3)
+
+2026-09-24: follow-up to `e13631d`. Only synthetic fixtures were used. Raw reports
+were not changed; no probes, DHCP traffic, network configuration changes or
+execution-policy changes were performed. The final review prepares these changes
+for a normal commit and push preserving the existing history.
+
+## Before implementation: regression demonstration
+
+The new `Test-SnapshotComparison.ps1` was added and run against unchanged production
+code using `powershell.exe -NoProfile -File .\tests\Test-SnapshotComparison.ps1`.
+The valid pre-fix run exited **1: 21 passed, 15 failed** across 36 assertions.
+Failures were appearance/removal with an opposite IP-only loopback, duplicate
+inventory ambiguity, and removal/addition/empty-to-empty/disconnected context for
+the three address-list fields. Other uncertainty/fallback/order/policy cases passed.
+An initial harness helper named `Compare` collided with PowerShell's built-in alias
+(3 passed/33 failed); that helper was renamed before the valid baseline run, with
+production code still unchanged. Those harness failures are not product regressions.
+
+The causes were (1) a blanket check for GUIDs on every derived interface, including
+non-inventory IP-only records, and (2) empty lists labelled `Missing`, excluded from
+comparison by its `Available`-only gate. Duplicate adapter rows could also be hidden
+by a single configuration SettingID; identity correlation now preserves ambiguity.
+
+## After implementation: actual file execution
+
+Normal Windows PowerShell **5.1.19041.7725** file execution in the existing Windows
+10 non-elevated agent environment, from the repository directory:
+
+| Command | Exit | Result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-SnapshotComparison.ps1` | 0 | 54 assertions passed (original 36 plus 18 focused coverage/provenance cases) |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpContext.ps1` | 0 | 52 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpReview.ps1` | 0 | 41 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-EventCorrelation.ps1` | 0 | 27 assertions passed |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1` | 1 | Ran, then stopped on atomic replacement access denial; complete suite not verified |
+
+**174 assertions passed** across four suites. The orchestration error is:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12
+FullyQualifiedErrorId: UnauthorizedAccessException
+```
+
+This is a restricted-agent storage failure during normal script execution, not an
+execution-policy bypass or an inline test substitute. The subsequent user-run
+0.4.1 orchestration-suite pass is recorded above. A live 0.4.1 collector comparison
+remains unverified here. Windows 11 remains untested.
+
+The new cases verify actual-inventory presence, incomplete/unavailable inventories,
+missing/conflicting/duplicate identities, unchanged adapters, all three empty-list
+transitions, malformed/unavailable/uncollected/ambiguous source coverage, null versus
+empty provider properties, route/DNS fallback values and provenance, unordered IPv4
+sets, disconnected state, expectations neutrality, serialized `[]`, scoped check-level
+references for absent rows, and schema-7 raw-baseline normalization. Existing test
+changes are version expectations and providing actual inventory in a previously
+hand-constructed empty baseline; no storage checks were weakened. Milestone2's
+version assertions were updated but that separate suite was not rerun in this task.
+
+## Contract and limitations
+
+Collector **0.4.1**, root **schema 8**, context **contract 3** explicitly version the
+new `ObservedEmpty` availability semantics, `CheckReferences`/`EnumerationValid`
+source metadata and presence inventory references. Schemas 6/7/8 are accepted as
+baselines and normalized from raw checks. Old collector 0.4.0 cannot load schema 8.
+
+Presence needs complete successful actual inventories with uniquely correlated
+stable identities; an unidentified relevant adapter can conceal a counterpart,
+while unrelated IP-only records cannot. Empty configuration needs a known adapter,
+a complete snapshot and successful well-formed source enumeration. Address-row
+absence establishes IPv4 emptiness; gateways additionally need matching configuration
+and route coverage; DNS needs matching configuration and explicit empty provider
+lists. Null primary fields alone, absent DNS objects, missing matching primary
+configuration, invalid/duplicate rows and unavailable fallbacks remain unassessed.
+This is deliberately conservative. Existing raw values/statuses are retained, and
+expectations continue to leave empty configuration unassessed. No live network-fault
+resolution or continuous state between snapshots is inferred.
+
+Run the same five commands above in a normal Windows PowerShell terminal from the
+repository directory; record `$LASTEXITCODE` after each. Optional passive comparison:
+
+```powershell
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -PreviousSnapshotPath '.\output\prior snapshot\evidence.json'
+$LASTEXITCODE
+```
+
+Replace the baseline path with a same-host schema-6/7/8 report. Active probes stay
+disabled. All new test output is under ignored `output/tests/`.
+
+---
+
 # Historical MAC correlation regression fix (2026-09-24)
 
 Focused change to the uncommitted 0.4.0/schema 7 implementation. ContractVersion

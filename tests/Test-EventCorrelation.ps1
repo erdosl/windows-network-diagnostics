@@ -68,7 +68,7 @@ $raw=ConvertTo-Json $e.Checks -Depth 24 -Compress
 $paths=Write-DiagnosticReport $e $dir
 $html=Get-Content -Raw $paths.HtmlPath
 Assert-Event ($html.Contains('No current identifier match') -and $html.Contains('Historical &lt;cloned identity&gt;')) 'HTML exposes escaped event and corrected result'
-Assert-Event ((ConvertTo-Json $e.Checks -Depth 24 -Compress) -ceq $raw -and $e.ContextEvidence.ContractVersion -eq 2) 'Raw evidence and contract version preserved'
+Assert-Event ((ConvertTo-Json $e.Checks -Depth 24 -Compress) -ceq $raw -and $e.ContextEvidence.ContractVersion -eq 3) 'Raw evidence and contract version preserved'
 $e=New-EventFixture;Add-NoMac $e 6 $false;Update-DhcpContext $e
 $html=ConvertTo-DhcpContextHtml $e
 $event=(Context $e)[0]

@@ -140,5 +140,6 @@ Assert-Context ((Get-DhcpInterfaceContext $unknownLink).Values.LinkState -eq 'Un
 $emptyBaseline=[pscustomobject]@{Identity=$baseline.Identity;AdapterInventoryStatus='Unavailable';Interfaces=@()}
 Assert-Context ((Compare-DhcpContext @($i) $emptyBaseline $e).Changes[0].Outcome -eq 'Not assessed') 'Missing baseline inventory is not adapter appearance'
 $emptyBaseline.AdapterInventoryStatus='Success'
+$emptyBaseline | Add-Member NoteProperty Checks @([pscustomobject]@{Name='Adapters';Status='Success';Data=@()})
 Assert-Context ((Compare-DhcpContext @($i) $emptyBaseline $e).Changes[0].Outcome -eq 'Appeared') 'Complete empty baseline establishes observed appearance'
 Write-Host "PASS: $script:count DHCP context assertions on $($PSVersionTable.PSVersion)."

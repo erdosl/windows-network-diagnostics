@@ -83,3 +83,9 @@
   identify snapshot scope/run and resolve within the report; never import prior
   comparisons or nested baseline history. Keep important changes visible and carry
   adapter state into comparison presentation.
+
+- Assess adapter presence from actual inventory, not unrelated derived IP-only
+  interfaces. Preserve unknown/conflicting inventoried identities as uncertainty.
+- Treat observed-empty configuration as a distinct versioned availability state
+  only with complete source coverage and applicable fallback checks. Comparison
+  removals must not turn empty configuration into an expectations mismatch.

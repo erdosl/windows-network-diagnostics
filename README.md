@@ -1,6 +1,6 @@
 # Windows network diagnostics
 
-Collector `0.4.0` (schema 7) collects bounded Windows 10/11 network snapshots for
+Collector `0.4.1` (schema 8) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -184,7 +184,7 @@ Code references: [Microsoft DNS error codes](https://learn.microsoft.com/en-us/w
 
 | Parameter | Default | Bounds / meaning |
 | --- | --- | --- |
-| `PreviousSnapshotPath` | omitted | Optional schema 6/7 evidence JSON; same computer; bounded input worker |
+| `PreviousSnapshotPath` | omitted | Optional schema 6/7/8 evidence JSON; same computer; bounded input worker |
 | `ExpectationsPath` | omitted | Optional version 1 expectations JSON; bounded input worker |
 | `LookbackHours` | 24 | 1-168; event history ending at collection start |
 | `MaxEventsPerLog` | 200 | 1-1000; System network group and each dedicated log |
@@ -239,7 +239,7 @@ by index, retains all addresses and default routes, shows family-specific metric
 and reports unavailable sources. It does not choose an "active gateway" from
 configuration. Raw check evidence remains below the summaries and in JSON.
 
-Schema **7** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
+Schema **8** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
 `StartedAt`/`CompletedAt` with offsets, `CollectionStatus`, `Revision`, `PendingCheck`,
 `PlannedChecks`, `Parameters`, and `CollectionError`. `CollectedAt` remains an alias
 for start time. Parameters formerly at the root now live under `Parameters`.
@@ -328,6 +328,7 @@ powershell.exe -NoProfile -File .\tests\Test-DhcpContext.ps1
 powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
 powershell.exe -NoProfile -File .\tests\Test-DhcpReview.ps1
 powershell.exe -NoProfile -File .\tests\Test-EventCorrelation.ps1
+powershell.exe -NoProfile -File .\tests\Test-SnapshotComparison.ps1
 ```
 
 They are dependency-free. Tests use synthetic data/mocked collectors, real local
@@ -445,7 +446,8 @@ are joined within a snapshot by interface index; disagreement or duplicate GUIDs
 is ambiguous. There is deliberately no alias/MAC/index cross-snapshot fallback.
 MAC changes remain visible. Computer name compatibility is a safeguard, not
 cryptographic proof of machine identity. Adapter disappearance/appearance requires
-complete, successful relevant inventory without unidentified adapters. Missing
+complete, successful actual adapter inventories with unique, correlated identities;
+unrelated IP-only records outside those inventories do not block absence assessment. Missing
 values/checks are `Not assessed`, not configuration changes. Address and gateway
 sets ignore order; DNS list order is significant. Advanced obtained/expiry times
 are labelled `Lease refreshed`, without claiming a captured renewal exchange or
@@ -501,10 +503,10 @@ indicator are retained. There is no universal stale-event threshold. Unavailable
 logs, raw messages/XML and provider availability remain in the original checks;
 logs are never enabled. XML external entities/DTDs are prohibited.
 
-Schema **7** adds `DhcpSummary`, `SnapshotComparison`, `ExpectationAssessment`,
+Schema **7** introduced `DhcpSummary`, `SnapshotComparison`, `ExpectationAssessment`,
 `HistoricalEventContext`, and `ContextInputs`, plus request flags in `Parameters`.
-`ContextEvidence.ContractVersion=2` identifies the refined, still-unreleased schema-7
-derived contract. Existing checks, collection/probe status semantics, findings and logical map remain
+`ContextEvidence.ContractVersion=2` identified the schema-7 derived contract;
+0.4.1 uses schema 8 / contract 3 as described below. Existing checks, collection/probe status semantics, findings and logical map remain
 intact. Optional inputs retain their own collection status; they do not count as
 network operation outcomes. Derived sections are regenerated at each atomic
 checkpoint from available evidence; early checkpoints can be incomplete. Source
@@ -576,6 +578,58 @@ shows the reason before raw details via `AssessmentReasons`. Missing, unsuccessf
 empty and insufficient-identity inventories have distinct reason codes. Exact
 current matches remain explicit even if other identities are missing; multiple
 current matches remain ambiguous. Historical matches remain separately scoped to
-the baseline even when current absence is unassessable. These additive fields keep
-`ContextEvidence.ContractVersion=2`. None attributes a current fault or an unmatched
+the baseline even when current absence is unassessable. Those event-correlation fields were additive to contract 2 and remain in contract 3. None attributes a current fault or an unmatched
 old MAC to a particular adapter without historical evidence.
+
+## Presence and observed-empty comparisons (0.4.1 / schema 8)
+
+`ContextEvidence.ContractVersion=3` adds an explicit `ObservedEmpty` availability
+value for IPv4, gateways and DNS collections. This distinguishes successfully
+observed `[]` from `Missing`, `No matching record`, `Unavailable`, `NotCollected`,
+`Incomplete`, `Invalid` and `Ambiguous` evidence. The comparison accepts
+`Available` and `ObservedEmpty` on both sides: populated-to-empty and reverse
+transitions are `Changed`; empty-to-empty is `Unchanged`. JSON still contains `[]`,
+never a null element substituted for an empty collection. Expectations continue
+to assess only nonempty `Available` configuration, so this change does not turn
+missing or empty configuration into a confirmed policy mismatch.
+
+Observed emptiness requires a complete snapshot and an unambiguously identified
+inventoried adapter, plus the following source semantics:
+
+- **IPv4:** one successful, well-formed `IPAddresses` enumeration contains no IPv4
+  address for that adapter. This command enumerates address rows: no matching rows
+  can establish emptiness when the adapter is independently known to exist.
+- **Gateways:** one matching successful DHCP/configuration record has an existing
+  gateway property containing null or an explicit empty array, and a successful,
+  well-formed routes enumeration has no non-on-link default gateway for that
+  interface. Null primary configuration alone is not proof. A missing primary
+  record/property or unavailable route coverage remains unassessed.
+- **DNS:** one matching successful configuration record has an existing DNS
+  property containing null or an explicit empty array, and successful DNS inventory
+  returns matching interface/family records with explicit empty `ServerAddresses`
+  arrays. A missing DNS record, null provider array, duplicate family, or malformed
+  enumeration remains unassessed. Complete enumeration covers the returned family
+  records; no cross-family query-path preference is inferred.
+
+Configured fallback route/DNS values take precedence over an empty primary field
+when deriving the effective list; their source references remain visible. Failed
+or ambiguous coverage is never converted into empty evidence. Duplicate checks,
+malformed values and contradictory identity records remain explicit. Existing
+disconnected-adapter state notes apply to removals and additions too; configured
+changes are not active-path fault diagnoses.
+
+Presence assessment uses actual `Adapters` records in both complete snapshots.
+Each record must correlate within its snapshot to one unique stable identity;
+missing/conflicting identities and duplicate GUIDs preserve uncertainty. IP-only
+loopback or other non-inventory interface records cannot conceal an inventoried
+adapter and do not veto absence. No cross-snapshot MAC, alias or index matching
+is introduced. Appearance/disappearance rows include readable `Detail`, structured
+`BeforePresenceReason`/`AfterPresenceReason`, and scoped inventory references, even
+when the absent side has no adapter record. Both context and raw inventory remain
+inspectable from the HTML.
+
+Source descriptors now include `CheckReferences` and `EnumerationValid`. Check-level
+references preserve provenance for an empty enumeration with no data-row reference.
+Raw checks remain unchanged. Schema-6/7/8 baselines are re-derived from raw checks
+using the same rules, not their older availability labels. Schema 8 explicitly
+versions this semantic change; collector 0.4.0 cannot read a schema-8 baseline.
