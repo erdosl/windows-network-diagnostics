@@ -40,6 +40,21 @@ function New-ProbeTcpClient {
     [Net.Sockets.TcpClient]::new($AddressFamily)
 }
 
+function Set-ProbeInterfaceBinding {
+    param($Client,[int]$RequestedInterfaceIndex,[string]$RequestedSourceAddress,[Net.Sockets.AddressFamily]$Family)
+    $source=$null
+    if(-not [Net.IPAddress]::TryParse($RequestedSourceAddress,[ref]$source) -or $source.AddressFamily -ne $Family){throw [NotSupportedException]::new('Requested source address and destination families differ or source is invalid.')}
+    $matches=@(Get-NetIPAddress -IPAddress $source.ToString() -ErrorAction Stop)
+    if($matches.Count -ne 1 -or $matches[0].InterfaceIndex -ne $RequestedInterfaceIndex){throw [NotSupportedException]::new('Requested source is not uniquely assigned to the requested interface.')}
+    try{
+        $level=[Net.Sockets.SocketOptionLevel]::IP;$value=[Net.IPAddress]::HostToNetworkOrder($RequestedInterfaceIndex)
+        if($Family -eq [Net.Sockets.AddressFamily]::InterNetworkV6){$level=[Net.Sockets.SocketOptionLevel]::IPv6;$value=$RequestedInterfaceIndex}
+        # Windows IP_UNICAST_IF / IPV6_UNICAST_IF = 31; IPv4 uses network byte order.
+        $Client.Client.SetSocketOption($level,[Net.Sockets.SocketOptionName]31,[int]$value)
+        $Client.Client.Bind([Net.IPEndPoint]::new($source,0))
+    }catch{throw [NotSupportedException]::new('Requested socket binding could not be established; no unbound fallback.', $_.Exception)}
+}
+
 function New-ProbeTlsStream {
     param($Stream)
     [Net.Security.SslStream]::new($Stream, $false)
@@ -71,6 +86,7 @@ function Invoke-ConnectivityProbe {
     param([ValidateSet('Resolve','Route','Gateway','DNS','TCP','HTTPS')][string]$Kind,
         [string]$Destination, [int]$Port = 443, [string]$QueryName = 'example.com', [string]$QueryType = 'A',
         [string]$Endpoint = 'https://example.com/', [int]$InterfaceIndex = 0, $DnsTarget = $null,
+        [int]$RequestedInterfaceIndex=0,[string]$RequestedSourceAddress,
         [bool]$IncludeGatewayPing = $false, [ValidateRange(100,60000)][int]$TimeoutMs = 3000)
     $start = [DateTimeOffset]::Now
     $watch = [Diagnostics.Stopwatch]::StartNew()
@@ -80,10 +96,15 @@ function Invoke-ConnectivityProbe {
     $result = [ordered]@{ Kind = $Kind; Destination = $Destination; Port = $Port; AddressFamily = $family
         StartedAt = $start.ToString('o'); CompletedAt = $null; DurationMs = 0; Outcome = 'Failed'; Error = $null
         DnsTarget = $DnsTarget; DnsError = $null; ProbeTimeoutMs = $TimeoutMs; TimeoutScope = $null; CompletedStages = @()
-        RoutePrediction = $null; RouteError = $null; ObservedConnection = $null; Evidence = $null }
+        RoutePrediction = $null; RouteError = $null; ObservedConnection = $null; Evidence = $null
+        IntendedInterfaceIndex=$RequestedInterfaceIndex;RequestedSourceAddress=$RequestedSourceAddress;BindingStatus='Not requested' }
     $client = $null
     $ssl = $null
     try {
+        if($RequestedInterfaceIndex -gt 0){
+            $result.BindingStatus='Not established'
+            if($Kind -in @('DNS','Gateway','Route')){throw [NotSupportedException]::new('This native probe does not guarantee requested source/interface binding; no unbound probe was sent.')}
+        }
         if ($Kind -ne 'Resolve') {
             try { $result.RoutePrediction = Get-RoutePrediction $Destination }
             catch { $result.RouteError = $_.Exception.Message }
@@ -91,6 +112,7 @@ function Invoke-ConnectivityProbe {
         $null = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'route setup'
         switch ($Kind) {
             'Resolve' {
+                if($parsed){$result.Evidence=@([pscustomobject]@{IPAddress=$parsed.ToString();AddressFamily=$parsed.AddressFamily.ToString()});$result.Outcome='Success';break}
                 $resolution = [Net.Dns]::BeginGetHostAddresses($Destination, $null, $null)
                 try {
                     if (-not $resolution.AsyncWaitHandle.WaitOne((Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'name resolution'))) {
@@ -102,6 +124,7 @@ function Invoke-ConnectivityProbe {
                     [pscustomobject]@{ IPAddress = $_.ToString(); AddressFamily = $_.AddressFamily.ToString() }
                 })
                 $result.Evidence = $addresses
+                if($RequestedInterfaceIndex){$result.BindingStatus='OS resolver preparation only; not an interface-bound DNS test'}
                 $result.Outcome = 'Success'
             }
             'Route' {
@@ -137,6 +160,10 @@ function Invoke-ConnectivityProbe {
             { $_ -in @('TCP','HTTPS') } {
                 if ($null -eq $parsed) { throw 'TCP/HTTPS workers require a resolved literal IP address.' }
                 $client = New-ProbeTcpClient $parsed.AddressFamily
+                if($RequestedInterfaceIndex -gt 0){
+                    Set-ProbeInterfaceBinding $client $RequestedInterfaceIndex $RequestedSourceAddress $parsed.AddressFamily
+                    $result.BindingStatus='Source bound; Windows outgoing interface option accepted'
+                }
                 $connect = $client.BeginConnect($parsed, $Port, $null, $null)
                 try {
                     if (-not $connect.AsyncWaitHandle.WaitOne((Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'TCP connect'))) { throw [TimeoutException]::new('TCP connect timed out.') }
@@ -181,6 +208,7 @@ function Invoke-ConnectivityProbe {
         $null = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'probe completion'
     } catch {
         $result.Outcome = $(if ((Test-ProbeTimeoutException $_.Exception) -or $watch.ElapsedMilliseconds -ge $TimeoutMs) { 'TimedOut' } else { 'Failed' })
+        if($_.Exception -is [NotSupportedException]){$result.Outcome='Unsupported'}
         if ($result.DnsError -and $result.DnsError.Classification -eq 'Timeout') { $result.Outcome = 'TimedOut'; $result.TimeoutScope = 'DNS' }
         elseif ($result.Outcome -eq 'TimedOut') { $result.TimeoutScope = 'Probe' }
         $result.Error = [pscustomobject]@{ Message = $_.Exception.Message; Id = $_.FullyQualifiedErrorId; Category = [string]$_.CategoryInfo.Category }

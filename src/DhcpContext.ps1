@@ -234,7 +234,7 @@ function Read-ContextInput {
     if ($file.PSIsContainer) { throw 'Optional input must be a JSON file.' }
     $inputObject = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     if ($Kind -eq 'Baseline') {
-        if ($inputObject.SchemaVersion -notin @(6,7,8) -or $inputObject.Mode -ne 'Snapshot' -or -not $inputObject.RunId -or $null -eq $inputObject.Checks) { throw 'Unsupported or malformed baseline; expected snapshot schema 6, 7 or 8.' }
+        if ($inputObject.SchemaVersion -notin @(6,7,8,9) -or $inputObject.Mode -ne 'Snapshot' -or -not $inputObject.RunId -or $null -eq $inputObject.Checks) { throw 'Unsupported or malformed baseline; expected snapshot schema 6, 7, 8 or 9.' }
         if (-not $ComputerName -or $inputObject.ComputerName -ne $ComputerName) { throw 'Baseline computer identity is incompatible.' }
         if (-not (ConvertTo-ContextTime $inputObject.StartedAt)) { throw 'Baseline start timestamp is invalid or lacks an offset.' }
         # Retain only the six check families consumed by these features. Never

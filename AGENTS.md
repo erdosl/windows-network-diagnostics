@@ -35,7 +35,11 @@
   including another working directory and paths with spaces. Never bypass execution
   restrictions or equate inline execution with end-to-end validation. Document the
   actual Windows version, privileges, commands, test results, and unverified coverage.
-- Defer monitoring, subnet scanning, Nmap, vendor lookup, and packet capture.
+- Defer continuous monitoring, subnet scanning, Nmap and vendor lookup. Separate,
+  explicitly requested bounded observation and narrowly filtered native capture
+  workflows are authorized; snapshots must never enable them implicitly. Refuse
+  capture if narrow filtering or session ownership cannot be guaranteed. Never
+  stop another owner's session. Use only mocked capture operations in development.
 - Do not commit or push unless explicitly requested by the user.
 
 - Preserve the cleaned noreply-email Git history; never reintroduce original commits.

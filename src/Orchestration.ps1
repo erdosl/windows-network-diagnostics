@@ -1,13 +1,14 @@
 function Invoke-SnapshotRun {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$RepositoryRoot,
-        [string]$PreviousSnapshotPath, [string]$ExpectationsPath,
+        [string]$PreviousSnapshotPath, [string]$ExpectationsPath, [string]$IncidentContextPath,
         [ValidateRange(1,168)][int]$LookbackHours = 24,
         [ValidateRange(1,1000)][int]$MaxEventsPerLog = 200,
         [ValidateRange(1,1000)][int]$MaxNicEvents = 200,
         [ValidateRange(1,1000)][int]$MaxPowerEvents = 100,
         [ValidateRange(1,600)][int]$CheckTimeoutSeconds = 30,
         [switch]$IncludeConnectivityTests, [switch]$IncludeGatewayPing, [switch]$IncludeLegacyDnsTargets,
+        [int]$ProbeInterfaceIndex=0,[string]$ProbeSourceAddress,[ValidateRange(1,64)][int]$MaxInterfaceProbes=16,
         [ValidateCount(1,16)][string[]]$TcpDestinations = @('1.1.1.1','2606:4700:4700::1111'),
         [ValidateRange(1,65535)][int]$TcpPort = 443,
         [string]$DnsQueryName = 'example.com', [string]$HttpsEndpoint = 'https://example.com/',
@@ -17,6 +18,10 @@ function Invoke-SnapshotRun {
         [scriptblock]$CheckExecutor, [scriptblock]$CheckpointObserver, [string]$TestOutputRoot)
     if ($IncludeGatewayPing -and -not $IncludeConnectivityTests) { throw 'IncludeGatewayPing requires IncludeConnectivityTests.' }
     if ($IncludeLegacyDnsTargets -and -not $IncludeConnectivityTests) { throw 'IncludeLegacyDnsTargets requires IncludeConnectivityTests.' }
+    if($ProbeInterfaceIndex -or $ProbeSourceAddress){
+        $sourceIp=$null
+        if(-not $IncludeConnectivityTests -or $ProbeInterfaceIndex -lt 1 -or $ProbeInterfaceIndex -gt 16777215 -or -not [Net.IPAddress]::TryParse($ProbeSourceAddress,[ref]$sourceIp)){throw 'Interface probes require IncludeConnectivityTests, ProbeInterfaceIndex and a literal ProbeSourceAddress.'}
+    }
     $uri = $null
     if (-not [uri]::TryCreate($HttpsEndpoint, [UriKind]::Absolute, [ref]$uri) -or $uri.Scheme -ne 'https' -or
         $uri.UserInfo -or $uri.Query -or $uri.Fragment) { throw 'HttpsEndpoint must be HTTPS without user information, query, or fragment.' }
@@ -28,7 +33,7 @@ function Invoke-SnapshotRun {
     $outputRoot = $(if ($TestOutputRoot) { $TestOutputRoot } else { Join-Path $RepositoryRoot 'output' })
     $directory = Join-Path $outputRoot ("snapshot-$computer-$($identity.RunId)")
     $null = New-Item -Path $directory -ItemType Directory -ErrorAction Stop
-    $evidence = [pscustomobject]@{ SchemaVersion = 8; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    $evidence = [pscustomobject]@{ SchemaVersion = 9; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()
@@ -37,6 +42,7 @@ function Invoke-SnapshotRun {
             PreviousSnapshotRequested = [bool]$PreviousSnapshotPath; ExpectationsRequested = [bool]$ExpectationsPath
             MaxNicEvents = $MaxNicEvents; MaxPowerEvents = $MaxPowerEvents; CheckTimeoutSeconds = $CheckTimeoutSeconds
             IncludeLegacyDnsTargets = [bool]$IncludeLegacyDnsTargets; IncludeConnectivityTests = [bool]$IncludeConnectivityTests; IncludeGatewayPing = [bool]$IncludeGatewayPing
+            ProbeInterfaceIndex=$ProbeInterfaceIndex;ProbeSourceAddress=$ProbeSourceAddress;MaxInterfaceProbes=$MaxInterfaceProbes
             TcpDestinations = $TcpDestinations; TcpPort = $TcpPort; DnsQueryName = $DnsQueryName
             HttpsEndpoint = $HttpsEndpoint; ProbeTimeoutSeconds = $ProbeTimeoutSeconds; ProbeWorkerOverheadSeconds = $ProbeWorkerOverheadSeconds }
         ContextInputs = @(); Checks = @(); Findings = Get-DiagnosticFindings @(); CollectionError = $null }
@@ -52,6 +58,10 @@ function Invoke-SnapshotRun {
         param($definition)
         $evidence.PlannedChecks += $definition.Name
         $evidence.PendingCheck = $definition.Name
+        if($ProbeInterfaceIndex -and $definition.FunctionName -eq 'Invoke-ConnectivityProbe'){
+            $definition.Arguments.RequestedInterfaceIndex=$ProbeInterfaceIndex
+            $definition.Arguments.RequestedSourceAddress=$ProbeSourceAddress
+        }
         & $save
         $timeout = $CheckTimeoutSeconds
         if ($definition.FunctionName -eq 'Invoke-ConnectivityProbe') {
@@ -70,6 +80,12 @@ function Invoke-SnapshotRun {
     }
     try {
         & $save
+        if($IncidentContextPath){
+            try{
+                $incidentPath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($IncidentContextPath)
+                & $execute ([pscustomobject]@{Name='IncidentContext';FunctionName='Read-IncidentContext';Arguments=@{Path=$incidentPath}})
+            }catch{$failure=$_;$evidence.Checks+=Invoke-DiagnosticCheck 'IncidentContext' {throw $failure}; & $save}
+        }
         foreach ($inputSpec in @(@('Baseline',$PreviousSnapshotPath),@('Expectations',$ExpectationsPath))) {
             if (-not $inputSpec[1]) { continue }
             # Resolve against the caller's working directory before entering a worker.
@@ -91,6 +107,10 @@ function Invoke-SnapshotRun {
             & $execute ([pscustomobject]@{ Name = $name; FunctionName = 'Invoke-SnapshotCollector'; Arguments = @{ Name = $name } })
         }
         $adapterInventory = @($evidence.Checks | Where-Object { $_.Name -eq 'Adapters' -and $_.Status -eq 'Success' } | ForEach-Object { $_.Data })
+        foreach($scope in @('User','Machine')){ & $execute ([pscustomobject]@{Name="Proxy:$scope";FunctionName='Get-ProxyInventory';Arguments=@{Scope=$scope}}) }
+        & $execute ([pscustomobject]@{Name='Proxy:WinHTTP';FunctionName='Get-WinHttpProxyInventory';Arguments=@{}})
+        foreach($scope in @('User','AllUsers')){ & $execute ([pscustomobject]@{Name="VPN:$scope";FunctionName='Get-VpnInventory';Arguments=@{AllUsers=($scope -eq 'AllUsers')}}) }
+        & $execute ([pscustomobject]@{Name='AdapterBindings';FunctionName='Get-BindingInventory';Arguments=@{}})
         foreach ($kind in @('AdapterStatistics','AdapterPowerManagement')) {
             if (-not $adapterInventory.Count) {
                 $evidence.Checks += [pscustomobject]@{Name=$kind;Status='Unavailable';Data=@();Error=[pscustomobject]@{Message='Adapter inventory unavailable or empty; no adapter detail checks scheduled.'}}
@@ -107,18 +127,26 @@ function Invoke-SnapshotRun {
         }
         if ($IncludeConnectivityTests) {
             $definitions = @(Get-ConnectivityDefinitions -Checks $evidence.Checks -TcpDestinations $TcpDestinations -TcpPort $TcpPort -DnsQueryName $DnsQueryName -HttpsEndpoint $HttpsEndpoint -ProbeTimeoutSeconds $ProbeTimeoutSeconds -IncludeGatewayPing ([bool]$IncludeGatewayPing) -IncludeLegacyDnsTargets ([bool]$IncludeLegacyDnsTargets))
+            if($ProbeInterfaceIndex){$definitions=@($definitions | Sort-Object @{Expression={if($_.Arguments.Kind -eq 'Resolve'){0}else{1}}})}
+            $probeCount=0
             foreach ($definition in $definitions) {
+                if($ProbeInterfaceIndex -and $probeCount -ge $MaxInterfaceProbes){break}
+                if($ProbeInterfaceIndex -and $definition.Arguments.Kind -eq 'Gateway' -and $definition.Arguments.InterfaceIndex -ne $ProbeInterfaceIndex){continue}
                 & $execute $definition
+                $probeCount++
                 if ($definition.Arguments.Kind -eq 'Resolve') {
                     $resolved = $evidence.Checks[-1]
                     foreach ($address in @($resolved.Data | Where-Object Outcome -eq 'Success' | ForEach-Object { $_.Evidence })) {
+                        if($ProbeInterfaceIndex -and $probeCount -ge $MaxInterfaceProbes){break}
                         $kind = $(if ($definition.Name -eq 'Connectivity:Resolve:HTTPS') { 'HTTPS' } else { 'TCP' })
                         $port = $(if ($kind -eq 'HTTPS') { $uri.Port } else { $TcpPort })
                         $arguments = @{ Kind = $kind; Destination = $address.IPAddress; Port = $port; Endpoint = $HttpsEndpoint; TimeoutMs = ($ProbeTimeoutSeconds * 1000) }
                         & $execute (New-ProbeDefinition "Connectivity:${kind}:$($definition.Arguments.Destination):$($address.IPAddress)" $arguments $ProbeTimeoutSeconds)
+                        $probeCount++
                     }
                 }
             }
+            if($ProbeInterfaceIndex -and $probeCount -ge $MaxInterfaceProbes){$evidence.Checks+=[pscustomobject]@{Name='Connectivity:Budget';Status='Skipped';Data=@('Explicit interface-probe budget exhausted; additional targets not assessed.');Error=$null}}
         } else {
             $evidence.Checks += [pscustomobject]@{ Name = 'Connectivity'; Status = 'Skipped'; Data = @('Active probes were not enabled.'); Error = $null }
         }

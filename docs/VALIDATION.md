@@ -1,3 +1,149 @@
+# Final pre-commit review (0.5.0)
+
+The final review tightened proxy redaction to suppress entire values containing a
+query or fragment (including semicolon/whitespace suffixes), and removed the null
+filter element from capture requests with ARP disabled. Focused normal Windows
+PowerShell 5.1.19041.7725 reruns:
+
+- `powershell.exe -NoProfile -File .\tests\Test-AdditionalEvidence.ps1`: exit 0,
+  **15 assertions passed** (two new redaction regressions).
+- `powershell.exe -NoProfile -File .\tests\Test-CaptureEvidence.ps1`: exit 0,
+  **24 assertions passed** (one new filter-metadata regression).
+
+These 39 agent-run assertions are separate from the earlier user-run transcript
+below; no unrelated suites were rerun. No live capture or probes were performed
+for this review. Existing validation limitations remain. The reviewed source,
+tests and documentation are prepared for a normal commit/push preserving history.
+
+---
+
+# Evidence extensions: user-run validation (0.5.0 / schema 9 / contract 3)
+
+The user supplied terminal output reporting **98 assertions passed across ten
+suites** on Windows PowerShell **5.1.19041.7725**. The transcript shows normal
+`powershell.exe -NoProfile -File` commands for nine suites and the additional
+evidence suite's PASS line. Numeric exit codes, elevation and OS build were not
+included in this transcript and are not inferred.
+
+| Suite | Reported assertions passed |
+| --- | --- |
+| Test-AdditionalEvidence.ps1 | 13 |
+| Test-DhcpOrchestration.ps1 | 8 |
+| Test-EntryLoading.ps1 | 8 |
+| Test-CaptureImport.ps1 | 3 |
+| Test-CaptureEvidence.ps1 | 23 |
+| Test-InterfaceProbes.ps1 | 10 |
+| Test-ObservationRun.ps1 | 5 |
+| Test-ObservationModel.ps1 | 7 |
+| Test-Observation.ps1 | 13 |
+| Test-AdditionalOrchestrationModel.ps1 | 8 |
+
+This supplies user-run passes for all three suites that previously stopped at
+atomic replacement in the agent environment: DHCP orchestration, observation
+orchestration and capture import. ObservationRun used mocked collectors with real
+atomic writes; CaptureImport verified raw artifact retention on decode failure.
+The separate model tests still mock persistence, and interface probes mock sockets.
+These results do not establish live observation, real interface-bound connectivity,
+live capture, elevated execution or Windows 11 validation. The agent's failures
+remain recorded separately below. No local paths or diagnostic identifiers were
+copied into this record. No tests were rerun solely to record the supplied results.
+
+---
+
+# Evidence extensions: agent validation (0.5.0 / schema 9 / contract 3)
+
+2026-09-24, starting from pushed `7b9ce4a`. At implementation time, changes were uncommitted. The agent
+environment is Windows 10 build 19045, non-elevated, Windows PowerShell
+5.1.19041.7725. Effective policy is RemoteSigned (CurrentUser; other scopes
+Undefined). No policy/security settings were changed. Windows 11 and elevated
+execution remain untested. No live capture, external connectivity probe, DHCP
+traffic generation or network configuration change was performed. The existing
+ProbeReview regression suite did open loopback-only TCP sockets; new interface
+probe tests mock all socket/query operations.
+
+All commands below used normal `powershell.exe -NoProfile -File` execution from
+the repository directory. Passing results total **354 assertions across 14 suites**;
+mocked storage tests are explicitly separated from real atomic persistence.
+
+| Script under `tests/` | Exit | Result |
+| --- | --- | --- |
+| Test-AdditionalEvidence.ps1 | 0 | 13: incident validation/escaping, proxy redaction/access denial, origin uncertainty, VPN allowlist and route references |
+| Test-AdditionalOrchestrationModel.ps1 | 0 | 8: default-passive/optional failure/budget/worker-input behavior; mocked persistence and collectors |
+| Test-Observation.ps1 | 0 | 13: state/failure distinctions, counters/rates/resets, scoped event deduplication |
+| Test-ObservationModel.ps1 | 0 | 7: timeout continuation, interruption and incomplete manifests; mocked persistence and collectors |
+| Test-InterfaceProbes.ps1 | 0 | 10: intended/observed attribution, IPv4/IPv6 socket options, mismatch/unsupported paths, cleanup; fully mocked sockets |
+| Test-CaptureEvidence.ps1 | 0 | 23: synthetic pcapng DHCP/ARP, selection/conflicts/client separation, malformed input/limits, refusal cases, raw-copy retention and encoded HTML; import report persistence mocked |
+| Test-EntryLoading.ps1 | 0 | 8: actual entry-point `-?` help plus dot-sourcing from another working directory and a copied path with spaces; no collection executed |
+| Test-Snapshot.ps1 | 0 | 42 existing snapshot assertions |
+| Test-Presentation.ps1 | 0 | 33 existing presentation assertions |
+| Test-SnapshotComparison.ps1 | 0 | 54 existing comparison/baseline assertions |
+| Test-DhcpContext.ps1 | 0 | 52 existing context assertions |
+| Test-DhcpReview.ps1 | 0 | 41 existing review assertions |
+| Test-EventCorrelation.ps1 | 0 | 27 existing event-correlation assertions |
+| Test-ProbeReview.ps1 | 0 | 23 existing timeout/TLS/failure assertions; loopback-only sockets |
+| Test-ObservationRun.ps1 | 1 | Stopped at atomic replacement access denial; full persistence/interruption suite not verified |
+| Test-CaptureImport.ps1 | 1 | Stopped at atomic replacement access denial; complete import/report persistence not verified |
+| Test-DhcpOrchestration.ps1 | 1 | Stopped at atomic replacement access denial; complete snapshot orchestration not verified |
+
+The three failed real-persistence runs produced:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12
+FullyQualifiedErrorId: UnauthorizedAccessException
+```
+
+Observation also warned that the final checkpoint could not be saved. Earlier
+checkpoint/raw files were left under ignored output/tests/. No delete/move fallback,
+policy bypass or elevated retry was used. Separate model suites exercise control
+flow with explicitly mocked persistence; they do not resolve or validate this
+restriction. Test-Milestone2 version assertions were updated but that suite was
+not rerun. Two development harness expectations were corrected (PowerShell JSON
+Unicode HTML escaping and module autoload replacing a mock); final counts above
+are the successful runs, not those initial harness failures.
+
+## Native capability inspection
+
+Read-only commands: `pktmon help`, `pktmon start help`, `pktmon filter add help`,
+`pktmon stop help`, `pktmon etl2pcap help`, `netsh trace start help`,
+`netsh trace stop help`, `netsh trace show CaptureFilterHelp`, and
+`powershell.exe -NoProfile -File .\tests\Inspect-CaptureCapability.ps1` (exit 0).
+Local pktmon file version: 10.0.19041.3636. Component/port/EtherType filtering is
+present; CLI owner-scoped stop is absent. The required independent-session API
+exports were not available in the local pktmonapi DLL. Inspection did not call
+capture initialization/start/stop/filter mutation. Official Microsoft references
+and the precise capability limitations are in [EVIDENCE-EXTENSIONS.md](EVIDENCE-EXTENSIONS.md).
+
+## Reproduction commands
+
+From the repository directory in normal Windows PowerShell, run each command and
+record `$LASTEXITCODE`. These use synthetic/mock inputs and do not start capture:
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Test-AdditionalEvidence.ps1
+powershell.exe -NoProfile -File .\tests\Test-AdditionalOrchestrationModel.ps1
+powershell.exe -NoProfile -File .\tests\Test-Observation.ps1
+powershell.exe -NoProfile -File .\tests\Test-ObservationModel.ps1
+powershell.exe -NoProfile -File .\tests\Test-ObservationRun.ps1
+powershell.exe -NoProfile -File .\tests\Test-InterfaceProbes.ps1
+powershell.exe -NoProfile -File .\tests\Test-CaptureEvidence.ps1
+powershell.exe -NoProfile -File .\tests\Test-CaptureImport.ps1
+powershell.exe -NoProfile -File .\tests\Test-EntryLoading.ps1
+powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
+```
+
+The subsequent user-run passes for these suites are recorded above. Older user-run
+results below apply only to earlier versions. New snapshot inventory providers, live observation,
+real interface-bound TCP/TLS and actual capture are not live-validated. Entry help
+and dot-sourcing are not full entry-point collection validation. Capture remains a
+deliberate Unavailable result: there is no enabled native lifecycle backend, so
+ownership/start/stop, duration/size enforcement and interruption cleanup of a live
+session remain unmet. Refusal mocks are not live capture validation. The offline
+decoder is deliberately limited, and applied configuration/neighbor correlation
+with imported captures remains manual. No current network-fault resolution is claimed.
+
+---
+
 # User-run validation: 0.4.1 / schema 8 / contract 3
 
 The user supplied a normal `powershell.exe -NoProfile -File` terminal transcript

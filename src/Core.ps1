@@ -1,6 +1,7 @@
 . (Join-Path $PSScriptRoot 'LogicalNetwork.ps1')
 . (Join-Path $PSScriptRoot 'DhcpContext.ps1')
 . (Join-Path $PSScriptRoot 'Findings.ps1')
+. (Join-Path $PSScriptRoot 'AdditionalEvidence.ps1')
 
 function Get-AddressClassification {
     param([AllowNull()][AllowEmptyString()][string]$Address)
@@ -175,6 +176,8 @@ function Write-DiagnosticReport {
     $null = New-Item -ItemType Directory -Path $OutputDirectory -Force -ErrorAction Stop
     $Evidence | Add-Member NoteProperty LogicalNetwork (Get-LogicalNetworkModel $Evidence) -Force
     Update-DhcpContext $Evidence
+    $Evidence | Add-Member NoteProperty ConfigurationOrigins (@(Get-ConfigurationOrigins $Evidence.Checks)) -Force
+    $Evidence | Add-Member NoteProperty VpnInterfaceContext (@(Get-VpnInterfaceContext $Evidence.Checks)) -Force
     $json = ConvertTo-Json -InputObject $Evidence -Depth 24
     $jsonPath = Join-Path $OutputDirectory 'evidence.json'
     $htmlPath = Join-Path $OutputDirectory 'summary.html'
@@ -197,6 +200,7 @@ function Write-DiagnosticReport {
     }
     $null = $html.Append((ConvertTo-LogicalNetworkHtml $Evidence.LogicalNetwork))
     $null = $html.Append((ConvertTo-DhcpContextHtml $Evidence))
+    $null = $html.Append((ConvertTo-AdditionalEvidenceHtml $Evidence))
     $null = $html.Append('<h2>Interfaces</h2><p>Joined by interface index within this snapshot. Default routes are candidates, not proof of an active gateway. Empty lists may reflect missing source checks; see SourceStatus.</p>')
     $interfaces = @(Get-InterfaceSummary -Checks $Evidence.Checks)
     if ($interfaces.Count -eq 0) { $null = $html.Append('<p>No interface data available. See check statuses below.</p>') }

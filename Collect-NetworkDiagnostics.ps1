@@ -3,6 +3,7 @@
 param(
     [string]$PreviousSnapshotPath,
     [string]$ExpectationsPath,
+    [string]$IncidentContextPath,
     [ValidateRange(1,168)][int]$LookbackHours = 24,
     [ValidateRange(1,1000)][int]$MaxEventsPerLog = 200,
     [ValidateRange(1,1000)][int]$MaxNicEvents = 200,
@@ -11,6 +12,9 @@ param(
     [switch]$IncludeConnectivityTests,
     [switch]$IncludeGatewayPing,
     [switch]$IncludeLegacyDnsTargets,
+    [ValidateRange(1,16777215)][int]$ProbeInterfaceIndex,
+    [string]$ProbeSourceAddress,
+    [ValidateRange(1,64)][int]$MaxInterfaceProbes=16,
     [ValidateCount(1,16)][string[]]$TcpDestinations = @('1.1.1.1','2606:4700:4700::1111'),
     [ValidateRange(1,65535)][int]$TcpPort = 443,
     [string]$DnsQueryName = 'example.com',

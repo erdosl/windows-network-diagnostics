@@ -1,6 +1,12 @@
 # Windows network diagnostics
 
-Collector `0.4.1` (schema 8) collects bounded Windows 10/11 network snapshots for
+The 0.5.0 additions are documented stage by stage in
+[Evidence extensions](docs/EVIDENCE-EXTENSIONS.md): incident/configuration inventory,
+separate bounded observation, explicit interface probes, and offline DHCP/ARP
+analysis. Native capture currently returns an explicit capability refusal;
+it does not start a session. Ordinary snapshots remain passive by default.
+
+Collector `0.5.0` (schema 9) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -184,7 +190,10 @@ Code references: [Microsoft DNS error codes](https://learn.microsoft.com/en-us/w
 
 | Parameter | Default | Bounds / meaning |
 | --- | --- | --- |
-| `PreviousSnapshotPath` | omitted | Optional schema 6/7/8 evidence JSON; same computer; bounded input worker |
+| `PreviousSnapshotPath` | omitted | Optional schema 6/7/8/9 evidence JSON; same computer; bounded input worker |
+| `IncidentContextPath` | omitted | Optional validated JSON user report, maximum 32 KiB; failure does not discard snapshot |
+| `ProbeInterfaceIndex` / `ProbeSourceAddress` | omitted | Explicit single interface and local IP; both require connectivity opt-in |
+| `MaxInterfaceProbes` | 16 | 1-64 checks including resolver preparation; applies only to explicitly selected interface |
 | `ExpectationsPath` | omitted | Optional version 1 expectations JSON; bounded input worker |
 | `LookbackHours` | 24 | 1-168; event history ending at collection start |
 | `MaxEventsPerLog` | 200 | 1-1000; System network group and each dedicated log |
@@ -239,7 +248,7 @@ by index, retains all addresses and default routes, shows family-specific metric
 and reports unavailable sources. It does not choose an "active gateway" from
 configuration. Raw check evidence remains below the summaries and in JSON.
 
-Schema **8** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
+Schema **9** retains the schema 2 identity/state fields: `ComputerName`, GUID `RunId`, `CollectorVersion`, `IsElevated`,
 `StartedAt`/`CompletedAt` with offsets, `CollectionStatus`, `Revision`, `PendingCheck`,
 `PlannedChecks`, `Parameters`, and `CollectionError`. `CollectedAt` remains an alias
 for start time. Parameters formerly at the root now live under `Parameters`.
@@ -352,8 +361,10 @@ primarily IPv4. Localized Wi-Fi output and Windows permissions/location settings
 may limit checks. A constrained or policy-blocked worker is reported as failure,
 not bypassed. Atomic file replacement requires a filesystem that supports it.
 
-Continuous monitoring, subnet scanning, Nmap, vendor lookup, packet capture, and
-Eero/UniFi integrations are out of scope. See [LICENSE](LICENSE).
+Continuous monitoring, subnet scanning, Nmap, vendor lookup and Eero/UniFi
+integrations remain out of scope. Separate bounded observation and optional capture
+were authorized for 0.5.0; native capture currently refuses to start for the specific
+ownership/filter limitations documented below. See [LICENSE](LICENSE).
 
 ## Adapter availability and APIPA context (0.3.1 / schema 6)
 
