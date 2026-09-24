@@ -19,6 +19,9 @@ $guid=$before.Checks[0].Data[0].InterfaceGuid
 $bstat=[pscustomobject]@{Name='AdapterStatistics:1';Status='Success';Data=@([pscustomobject]@{InterfaceGuid=$guid;Fields=[pscustomobject]@{ReceivedBytes=100}})}
 $astat=[pscustomobject]@{Name='AdapterStatistics:1';Status='Success';Data=@([pscustomobject]@{InterfaceGuid=$guid;Fields=[pscustomobject]@{ReceivedBytes=200}})}
 $before.Checks+=$bstat;$after.Checks+=$astat
+$before.RunId='synthetic-run';$after.RunId='synthetic-run'
+$bstat.Data[0] | Add-Member NoteProperty CounterTiming ([pscustomobject]@{RunId='synthetic-run';Basis='SystemStopwatch';StartSeconds=1;EndSeconds=2})
+$astat.Data[0] | Add-Member NoteProperty CounterTiming ([pscustomobject]@{RunId='synthetic-run';Basis='SystemStopwatch';StartSeconds=5;EndSeconds=6})
 $delta=@(Get-CounterDeltas $before $after 4)[0]
 Assert ($delta.Delta -eq 100 -and $delta.PerSecond -eq 25) 'Rate uses actual elapsed seconds'
 $astat.Data[0].Fields.ReceivedBytes=50

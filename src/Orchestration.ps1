@@ -116,7 +116,7 @@ function Invoke-SnapshotRun {
                 $evidence.Checks += [pscustomobject]@{Name=$kind;Status='Unavailable';Data=@();Error=[pscustomobject]@{Message='Adapter inventory unavailable or empty; no adapter detail checks scheduled.'}}
             }
             foreach ($adapter in $adapterInventory) {
-                & $execute ([pscustomobject]@{Name=($kind+':'+$adapter.InterfaceIndex);FunctionName='Invoke-AdapterDetail';Arguments=@{Kind=$kind;AdapterName=[string]$adapter.Name;InterfaceIndex=[int]$adapter.InterfaceIndex;InterfaceGuid=[string]$adapter.InterfaceGuid}})
+                & $execute ([pscustomobject]@{Name=($kind+':'+$adapter.InterfaceIndex);FunctionName='Invoke-AdapterDetail';Arguments=@{Kind=$kind;AdapterName=[string]$adapter.Name;InterfaceIndex=[int]$adapter.InterfaceIndex;InterfaceGuid=[string]$adapter.InterfaceGuid;InterfaceDescription=[string]$adapter.InterfaceDescription;AdapterInventory=@($adapterInventory | Select-Object Name,InterfaceIndex,InterfaceGuid,InterfaceDescription)}})
             }
         }
         $end = [DateTimeOffset]::Parse($identity.StartedAt).LocalDateTime

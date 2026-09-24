@@ -11,21 +11,45 @@ function Get-NativeCaptureCapability {
         Explanation='The supported pktmon CLI has global filters and no owner-scoped conditional stop. A preflight status check cannot prevent a competing session race. No capture/filter command is issued.'}
 }
 
+function Get-CaptureVlanScope {
+    param($Packet)
+    if($Packet.VlanTags -isnot [Collections.IList]){return $null}
+    if($Packet.VlanTags.Count -eq 0){return 'Untagged'}
+    if($Packet.VlanTags.Count -gt 2){return $null}
+    $parts=@()
+    foreach($tag in $Packet.VlanTags){
+        $tpid=0;$tci=0;$vid=0
+        if(-not [int]::TryParse([string]$tag.TPID,[ref]$tpid) -or $tpid -notin @(33024,34984) -or
+            -not [int]::TryParse([string]$tag.TCI,[ref]$tci) -or $tci -lt 0 -or $tci -gt 65535 -or
+            -not [int]::TryParse([string]$tag.VlanId,[ref]$vid) -or $vid -ne ($tci -band 4095)){return $null}
+        $parts+=('{0:X4}:{1}' -f $tpid,$vid)
+    }
+    'Tagged/'+($parts -join '/')
+}
+
 function Get-CaptureObservations {
     param($Packets)
-    foreach($group in @($Packets | Where-Object Kind -eq 'DHCPv4' | Group-Object { [string]$_.SectionId+'|'+$_.InterfaceId+'|'+$_.TransactionId+'|'+$_.ClientHardwareType+'|'+$_.ClientHardwareAddress+'|'+$_.ClientIdentifier })){
+    $assessed=@()
+    foreach($packet in $Packets){
+        if($packet.Kind -notin @('DHCPv4','ARP')){continue}
+        $scope=Get-CaptureVlanScope $packet
+        if($null -eq $scope){
+            [pscustomobject]@{Kind='CorrelationCoverage';Outcome='Not assessed';Reason='VLAN metadata is absent or invalid; untagged scope cannot be assumed.';SectionId=$packet.SectionId;InterfaceId=$packet.InterfaceId;PacketReferences=@($packet.BlockOffset)}
+        }else{$assessed+=$packet}
+    }
+    foreach($group in @($assessed | Where-Object Kind -eq 'DHCPv4' | Group-Object { [string]$_.SectionId+'|'+$_.InterfaceId+'|'+(Get-CaptureVlanScope $_)+'|'+$_.TransactionId+'|'+$_.ClientHardwareType+'|'+$_.ClientHardwareAddress+'|'+$_.ClientIdentifier })){
         $rows=@($group.Group);$offers=@($rows | Where-Object MessageType -eq 2)
         $responders=@($offers | ForEach-Object {$_.ServerIdentifier+'|'+$_.PacketSource} | Sort-Object -Unique)
-        [pscustomobject]@{Kind='DhcpTransaction';SectionId=$rows[0].SectionId;InterfaceId=$rows[0].InterfaceId;TransactionId=$rows[0].TransactionId;ClientHardwareAddress=$rows[0].ClientHardwareAddress;ClientIdentifier=$rows[0].ClientIdentifier
+        [pscustomobject]@{Kind='DhcpTransaction';VlanScope=(Get-CaptureVlanScope $rows[0]);SectionId=$rows[0].SectionId;InterfaceId=$rows[0].InterfaceId;TransactionId=$rows[0].TransactionId;ClientHardwareAddress=$rows[0].ClientHardwareAddress;ClientIdentifier=$rows[0].ClientIdentifier
             OfferResponders=$responders;ObservedCompetingResponders=($responders.Count -gt 1)
             SelectedServerIdentifiers=@($rows | Where-Object { $_.MessageType -eq 3 -and $_.ServerIdentifier } | ForEach-Object {$_.ServerIdentifier})
             AckNakConflict=(@($rows | Where-Object MessageType -eq 5).Count -gt 0 -and @($rows | Where-Object MessageType -eq 6).Count -gt 0)
             PacketReferences=@($rows | ForEach-Object {$_.BlockOffset});AppliedConfiguration='Not assessed'
             Limitation='Exchange may be incomplete. Client-ID presence differences remain separate. REQUEST Server-ID records selection, not first-offer ordering. ACK does not establish applied options. One responder does not establish exclusivity.'}
     }
-    foreach($group in @($Packets | Where-Object {$_.Kind -eq 'ARP' -and $_.Operation -in @(1,2) -and $_.SenderProtocolAddress -ne '0.0.0.0'} | Group-Object {[string]$_.SectionId+'|'+$_.InterfaceId+'|'+$_.SenderProtocolAddress})){
+    foreach($group in @($assessed | Where-Object {$_.Kind -eq 'ARP' -and $_.Operation -in @(1,2) -and $_.SenderProtocolAddress -ne '0.0.0.0'} | Group-Object {[string]$_.SectionId+'|'+$_.InterfaceId+'|'+(Get-CaptureVlanScope $_)+'|'+$_.SenderProtocolAddress})){
         $claims=@($group.Group.SenderHardwareAddress | Sort-Object -Unique)
-        if($claims.Count -gt 1){[pscustomobject]@{Kind='ArpClaims';SectionId=$group.Group[0].SectionId;InterfaceId=$group.Group[0].InterfaceId;IPAddress=$group.Group[0].SenderProtocolAddress;HardwareAddresses=$claims;PacketReferences=@($group.Group.BlockOffset);Observation='Differing sender MAC claims for one observed IP on one capture interface; relevance and cause require interpretation.';Fault='Not assessed';Role='Unknown; not equated with local adapter or gateway identity'}}
+        if($claims.Count -gt 1){[pscustomobject]@{Kind='ArpClaims';VlanScope=(Get-CaptureVlanScope $group.Group[0]);SectionId=$group.Group[0].SectionId;InterfaceId=$group.Group[0].InterfaceId;IPAddress=$group.Group[0].SenderProtocolAddress;HardwareAddresses=$claims;PacketReferences=@($group.Group.BlockOffset);Observation='Differing sender MAC claims for one observed IP on one capture interface and VLAN scope; relevance and cause require interpretation.';Fault='Not assessed';Role='Unknown; not equated with local adapter or gateway identity'}}
     }
 }
 
@@ -37,7 +61,7 @@ function Import-CaptureEvidence {
     if($item.Length -gt 64MB){throw 'Capture input exceeds 64 MiB.'}
     # Preserve raw input first; decoding failure must never discard it.
     Copy-Item -LiteralPath $Path -Destination $raw -ErrorAction Stop
-    $evidence=[pscustomobject]@{SchemaVersion=9;Mode='OfflineCaptureAnalysis';RunId=[guid]::NewGuid().ToString();StartedAt=[DateTimeOffset]::Now.ToString('o');CompletedAt=$null
+    $evidence=[pscustomobject]@{SchemaVersion=9;CaptureCorrelationVersion=2;Mode='OfflineCaptureAnalysis';RunId=[guid]::NewGuid().ToString();StartedAt=[DateTimeOffset]::Now.ToString('o');CompletedAt=$null
         Artifact=[pscustomobject]@{Path='capture.pcapng';Length=(Get-Item $raw).Length;Sha256=(Get-FileHash -LiteralPath $raw -Algorithm SHA256).Hash}
         DecoderStatus='Incomplete';Decoded=$null;Observations=@();Error=$null;NeighbourEvidence='Not collected; offline artifact cannot establish contemporaneous neighbour state.'}
     Set-AtomicText (Join-Path $OutputDirectory 'evidence.json') (ConvertTo-Json $evidence -Depth 24)

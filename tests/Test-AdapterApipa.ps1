@@ -7,7 +7,7 @@ function Assert-Fix {param($Condition,$Message);if(-not $Condition){throw $Messa
 $script:mode='ok'
 function Get-NetAdapterStatistics {
     [CmdletBinding()]param($Name,[switch]$IncludeHidden)
-    Assert-Fix ($Name -eq '*' -and $IncludeHidden) 'Hidden provider inventory queried without interpreting alias wildcards'
+    Assert-Fix ($Name -in @('Adapter `[lab`]`* `?','absent') -and $IncludeHidden) 'Hidden provider query escapes literal alias wildcards'
     switch($script:mode){
         'missing' {$PSCmdlet.ThrowTerminatingError([Management.Automation.ErrorRecord]::new([Exception]::new('Original localized message'),'CmdletizationQuery_NotFound_Name',[Management.Automation.ErrorCategory]::ObjectNotFound,$Name))}
         'denied' {throw [UnauthorizedAccessException]::new('Synthetic denied')}
@@ -18,7 +18,7 @@ function Get-NetAdapterStatistics {
 }
 $good=Invoke-DiagnosticCheck 'AdapterStatistics:7' {Invoke-AdapterDetail AdapterStatistics 'Adapter [lab]* ?' 7 'synthetic'}
 Assert-Fix ($good.Status -eq 'Success' -and $good.Data.Count -eq 1 -and $good.Data[0].Fields.ReceivedBytes -eq 1) 'Literal wildcard/spaces alias matches exactly'
-$absent=Invoke-DiagnosticCheck 'AdapterStatistics:9' {Invoke-AdapterDetail AdapterStatistics 'absent' 9 'synthetic'}
+$absent=Invoke-DiagnosticCheck 'AdapterStatistics:9' {Invoke-AdapterDetail AdapterStatistics 'absent' 9 'absent-guid'}
 Assert-Fix ($absent.Status -eq 'Unavailable' -and $absent.Error.Explanation -eq 'No matching adapter-provider object was returned.' -and $absent.Error.AdapterIdentity.InterfaceIndex -eq 9) 'Missing literal target unavailable with identity'
 foreach($case in @(@('missing','Unavailable'),@('denied','PermissionDenied'),@('unexpected','Failed'),@('mismatch','Failed'))){
     $script:mode=$case[0]
@@ -28,7 +28,7 @@ foreach($case in @(@('missing','Unavailable'),@('denied','PermissionDenied'),@('
 }
 function Get-NetAdapterPowerManagement {
     [CmdletBinding()]param($Name,[switch]$IncludeHidden)
-    Assert-Fix ($Name -eq '*' -and $IncludeHidden) 'Power includes hidden inventory'
+    Assert-Fix ($Name -eq 'Adapter `[lab`]`* `?' -and $IncludeHidden) 'Power scopes literal hidden target'
     $PSCmdlet.ThrowTerminatingError([Management.Automation.ErrorRecord]::new([Exception]::new('Power provider absent'),'CmdletizationQuery_NotFound_Name',[Management.Automation.ErrorCategory]::ObjectNotFound,$Name))
 }
 $power=Invoke-DiagnosticCheck 'AdapterPowerManagement:7' {Invoke-AdapterDetail AdapterPowerManagement 'Adapter [lab]* ?' 7 'synthetic'}

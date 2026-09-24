@@ -15,7 +15,7 @@ namespace NetworkDiagnostics {
         static Dictionary<string,object> Obj() { return new Dictionary<string,object>(); }
         public static object Decode(string path,int maxPackets) {
             var output=Obj(); var packets=new List<object>(); var errors=new List<object>();
-            output["Packets"]=packets;output["Errors"]=errors;output["Format"]="pcapng little-endian 1.0 Ethernet EPB";
+            output["Packets"]=packets;output["Errors"]=errors;output["VlanMetadataVersion"]=1;output["Format"]="pcapng little-endian 1.0 Ethernet EPB";
             output["Limitation"]="No reassembly, checksums, ETL decoding or physical topology inference. Unsupported/truncated frames remain referenced by offset. Capture may omit unicast traffic and earlier packets.";
             var links=new List<ushort>();var resolutions=new List<int>();bool section=false;int count=0,sectionId=-1;
             using(var stream=File.OpenRead(path)) using(var reader=new BinaryReader(stream)) {
@@ -71,12 +71,15 @@ namespace NetworkDiagnostics {
         }
         static Dictionary<string,object> Frame(byte[] b) {
             if(b.Length<14)throw new InvalidDataException("Truncated Ethernet header.");
-            int p=14;ushort type=BE16(b,12);
+            int p=14;ushort type=BE16(b,12);var tags=new List<object>();
             for(int vlan=0;type==0x8100 || type==0x88a8;vlan++) {
                 if(vlan>=2 || b.Length<p+4)throw new InvalidDataException("Unsupported/truncated VLAN header.");
+                ushort tci=BE16(b,p);var tag=Obj();tag["TPID"]=type;tag["TCI"]=tci;
+                tag["VlanId"]=tci&0xfff;tag["PCP"]=(tci>>13)&7;tag["DEI"]=(tci>>12)&1;tags.Add(tag);
                 type=BE16(b,p+2);p+=4;
             }
-            var row=Obj();row["EthernetSource"]=Hex(b,6,6);row["EthernetDestination"]=Hex(b,0,6);
+            if(type==0x9100 || type==0x9200 || type==0x9300)throw new InvalidDataException("Unsupported VLAN TPID; raw frame retained.");
+            var row=Obj();row["VlanTags"]=tags;row["EthernetSource"]=Hex(b,6,6);row["EthernetDestination"]=Hex(b,0,6);
             if(type==0x806) {
                 if(b.Length<p+28 || BE16(b,p)!=1 || BE16(b,p+2)!=0x800 || b[p+4]!=6 || b[p+5]!=4)throw new InvalidDataException("Unsupported/truncated ARP packet.");
                 row["Kind"]="ARP";row["Operation"]=BE16(b,p+6);row["SenderHardwareAddress"]=Hex(b,p+8,6);row["SenderProtocolAddress"]=IP(b,p+14);

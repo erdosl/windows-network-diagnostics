@@ -40,34 +40,11 @@ Assert-Condition ($bad.Status -eq 'Failed' -and $bad.Error.Message -match 'Synth
 
 # Full parent orchestration with mocked passive/event/probe collectors.
 $script:executed = @()
-$mock = {
-    param($definition, $timeout, $directory)
-    if ($definition.FunctionName -eq 'Invoke-ConnectivityProbe') {
-        Assert-Condition ($timeout -eq 25 -and $definition.Arguments.TimeoutMs -eq 10000) 'Separate probe and worker budgets, including resolution'
-    }
-    $script:executed += $definition
-    $data = @()
-    switch ($definition.Name) {
-        'Adapters' { $data = @([pscustomobject]@{ InterfaceIndex = 7; Name = 'Lab'; InterfaceDescription = 'Synthetic'; HardwareInterface = $true; Status = 'Up'; InterfaceType = 6; MacAddress = '00-00-00-00-00-00'; LinkSpeed = '1 Gbps' }) }
-        'IPAddresses' { $data = @([pscustomobject]@{ InterfaceIndex = 7; IPAddress = '192.0.2.2'; PrefixLength = 24; AddressState = 'Preferred'; AddressFamily = 2 }, [pscustomobject]@{ InterfaceIndex = 7; IPAddress = '2001:db8::2'; PrefixLength = 64; AddressState = 'Tentative'; AddressFamily = 23 }) }
-        'Routes' { $data = @([pscustomobject]@{ InterfaceIndex = 7; DestinationPrefix = '0.0.0.0/0'; NextHop = '192.0.2.1'; RouteMetric = 10; AddressFamily = 2 }, [pscustomobject]@{ InterfaceIndex = 7; DestinationPrefix = '::/0'; NextHop = 'fe80::1'; RouteMetric = 20; AddressFamily = 23 }) }
-        'DNSServers' { $data = @([pscustomobject]@{ InterfaceIndex = 7; AddressFamily = 2; ServerAddresses = @('192.0.2.53') }) }
-        'InterfacesAndMetrics' { $data = @([pscustomobject]@{ InterfaceIndex = 7; AddressFamily = 2; InterfaceMetric = 25 }) }
-        'NICServices' { $data = @([pscustomobject]@{ ServiceName = 'SyntheticDriver' }) }
-    }
-    if ($definition.FunctionName -eq 'Invoke-ConnectivityProbe') {
-        $addresses = @()
-        if ($definition.Arguments.Kind -eq 'Resolve') { $addresses = @([pscustomobject]@{ IPAddress = '192.0.2.8'; AddressFamily = 'InterNetwork' }, [pscustomobject]@{ IPAddress = '2001:db8::8'; AddressFamily = 'InterNetworkV6' }) }
-        $data = @([pscustomobject]@{ Kind = $definition.Arguments.Kind; Destination = $definition.Arguments.Destination
-            Outcome = $(if ($definition.Arguments.Kind -eq 'Resolve') { 'Success' } else { 'Failed' })
-            Error = 'Synthetic refusal/no response; no root cause established'; Evidence = $addresses; ObservedConnection = $null })
-    }
-    [pscustomobject]@{ Name = $definition.Name; Status = $(if ($definition.Name -eq 'Windows') { 'TimedOut' } else { 'Success' }); Data = $data; Error = $null; Request = $definition.Arguments }
-}
+. (Join-Path $PSScriptRoot 'fixtures\Milestone2Orchestration.ps1')
 $script:checkpoints = @()
 $observer = { param($evidence, $directory)
     $saved = Read-DiagnosticEvidence (Join-Path $directory 'evidence.json')
-    $script:checkpoints += [pscustomobject]@{ Status = $saved.CollectionStatus; Count = $saved.Checks.Count; End = $saved.CompletedAt }
+    $script:checkpoints += [pscustomobject]@{ Status = $saved.CollectionStatus; Count = $saved.Checks.Count; End = $saved.CompletedAt; TimeoutCount=@($saved.Checks | Where-Object Status -eq 'TimedOut').Count }
 }
 $run = Invoke-SnapshotRun -TestOutputRoot (Join-Path $root 'output\tests\orchestration') -RepositoryRoot $root -CheckExecutor $mock -CheckpointObserver $observer
 Assert-Condition ($run.Evidence.SchemaVersion -eq 9 -and $run.Evidence.CollectionStatus -eq 'Complete') 'Versioned completed snapshot'
@@ -75,12 +52,15 @@ Assert-Condition ($run.Evidence.ComputerName -eq [Environment]::MachineName) 'Co
 $id = [guid]::Empty
 Assert-Condition ([guid]::TryParse($run.Evidence.RunId, [ref]$id)) 'Unique RunId is a GUID'
 Assert-Condition ($run.JsonPath.Contains($run.Evidence.RunId) -and $run.JsonPath.Contains($run.Evidence.ComputerName)) 'Output path includes run and computer'
-Assert-Condition ($run.Evidence.CollectorVersion -eq '0.5.2' -and $run.Evidence.IsElevated -is [bool]) 'Version and process elevation'
+Assert-Condition ($run.Evidence.CollectorVersion -eq '0.5.3' -and $run.Evidence.IsElevated -is [bool]) 'Version and process elevation'
 Assert-Condition ($run.Evidence.StartedAt -match '[+-]\d\d:\d\d$' -and $run.Evidence.CompletedAt -match '[+-]\d\d:\d\d$') 'Collection timestamps retain UTC offsets'
 Assert-Condition ($script:checkpoints[0].Status -eq 'Incomplete' -and $script:checkpoints[0].Count -eq 0) 'Checkpoint exists before first check'
 Assert-Condition (@($script:checkpoints | Where-Object { $_.Status -eq 'Incomplete' -and $_.Count -gt 0 }).Count -gt 0) 'Completed checks saved incrementally'
 Assert-Condition (@($script:executed | Where-Object FunctionName -eq 'Invoke-ConnectivityProbe').Count -eq 0) 'No active operations by default'
-Assert-Condition ($run.Evidence.Checks[0].Status -eq 'TimedOut' -and $run.Evidence.Checks.Count -eq 22) 'Full orchestration continues after timeout'
+$savedFinal=Get-Content -LiteralPath $run.JsonPath -Raw -Encoding UTF8 | ConvertFrom-Json
+Assert-Milestone2Continuation -Evidence $run.Evidence -Executed $script:executed -Saved $savedFinal
+Assert-Condition (@($script:checkpoints | Where-Object {$_.Status -eq 'Incomplete' -and $_.Count -eq 1 -and $_.TimeoutCount -eq 1}).Count -gt 0) 'Timeout saved before later checks execute'
+Assert-Condition ($script:checkpoints[-1].Status -eq 'Complete' -and $script:checkpoints[-1].TimeoutCount -eq 1 -and $script:checkpoints[-1].End -eq $savedFinal.CompletedAt) 'Final persisted checkpoint preserves timeout and completion'
 $summary = @(Get-InterfaceSummary $run.Evidence.Checks)
 Assert-Condition ($summary.Count -eq 1 -and $summary[0].Addresses.Count -eq 2 -and $summary[0].DefaultRoutes.Count -eq 2) 'Correlates multiple addresses and routes'
 Assert-Condition ($summary[0].DefaultRoutes[0].InterfaceMetrics[0].InterfaceMetric -eq 25) 'Metrics joined by interface and family'

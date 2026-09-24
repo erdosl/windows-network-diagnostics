@@ -51,3 +51,6 @@ __pycache__/
 .venv/
 venv/
 node_modules/
+
+# Private Windows 11 validation evidence
+/windows-11-files/

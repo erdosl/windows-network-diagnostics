@@ -45,8 +45,10 @@ function Invoke-DiagnosticCheck {
         elseif ($_.Exception -is [System.Management.Automation.CommandNotFoundException] -or
             $_.FullyQualifiedErrorId -match 'NoMatchingLogsFound|NoMatchingProvidersFound' -or
             $_.Exception -is [System.NotSupportedException]) { $status = 'Unavailable' }
+        if($_.Exception.Data['EvidenceStatus']){$status=$_.Exception.Data['EvidenceStatus']}
         [pscustomobject]@{ Name = $Name; StartedAt = $started; Status = $status; Data = @(); Error = [pscustomobject]@{
             Message = $_.Exception.Message; Id = $_.FullyQualifiedErrorId; Category = [string]$_.CategoryInfo.Category; ExceptionType=$_.Exception.GetType().FullName; Explanation=$explanation; AdapterIdentity=$_.Exception.Data['AdapterIdentity']
+            ProviderDiagnostic=$_.Exception.Data['ProviderDiagnostic']; Evidence=$_.Exception.Data['Evidence']; HResult=$_.Exception.HResult; NativeErrorCode=$_.Exception.NativeErrorCode
         } }
     }
 }

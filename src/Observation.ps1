@@ -156,22 +156,25 @@ function Get-CounterDeltas {
         $rows=@($check.Data);$row=$null;if($rows.Count -eq 1){$row=$rows[0]}
         $old=@($Before.Checks | Where-Object { $_.Name -like 'AdapterStatistics:*' -and $_.Status -eq 'Success' } | ForEach-Object {$_.Data} | Where-Object {$row.InterfaceGuid -and $_.InterfaceGuid -eq $row.InterfaceGuid})
         $discontinuity=$check.Status -ne 'Success' -or $old.Count -ne 1 -or -not $row.InterfaceGuid -or $ElapsedSeconds -le 0
-        $counterSeconds=$ElapsedSeconds;$intervalBasis='Sample start times; counter timestamps unavailable'
-        if($old.Count -eq 1 -and $old[0].StartedAt -and $row.StartedAt){
-            $counterSeconds=([DateTimeOffset]::Parse($row.StartedAt)-[DateTimeOffset]::Parse($old[0].StartedAt)).TotalSeconds
-            $intervalBasis='Counter collection start timestamps'
-            if($counterSeconds -le 0){$discontinuity=$true}
+        $counterSeconds=$null;$intervalBasis='Unassessed: shared same-run monotonic counter timing unavailable'
+        if($old.Count -eq 1 -and $Before.RunId -and $Before.RunId -eq $After.RunId -and
+            $row.CounterTiming.RunId -eq $After.RunId -and $old[0].CounterTiming.RunId -eq $Before.RunId -and
+            $row.CounterTiming.Basis -eq 'SystemStopwatch' -and $old[0].CounterTiming.Basis -eq 'SystemStopwatch'){
+            $counterSeconds=$row.CounterTiming.StartSeconds-$old[0].CounterTiming.StartSeconds
+            $intervalBasis='Same-run system Stopwatch query starts; provider sampling occurs within retained query windows'
+            if($counterSeconds -le 0 -or $row.CounterTiming.StartSeconds -lt $old[0].CounterTiming.EndSeconds){$counterSeconds=$null}
         }
+        if($null -eq $counterSeconds){$discontinuity=$true}
         $links=@($Before.Checks+$After.Checks | Where-Object { $_.Name -eq 'Adapters' -and $_.Status -eq 'Success' } | ForEach-Object {$_.Data} | Where-Object InterfaceGuid -eq $row.InterfaceGuid)
         if($links.Count -ne 2 -or $links[0].Status -ne $links[1].Status){$discontinuity=$true}
         foreach($name in $names){
             $a=$null;$b=$null;if($old.Count -eq 1){$a=$old[0].Fields.$name};if($row){$b=$row.Fields.$name}
             $delta=$null;$rate=$null;$status='Unavailable'
             if($null -ne $a -and $null -ne $b){
-                $status='Discontinuity'
+                $status=$(if($null -eq $counterSeconds){'Not assessed'}else{'Discontinuity'})
                 if(-not $discontinuity -and [decimal]$b -ge [decimal]$a){$status='Delta';$delta=[decimal]$b-[decimal]$a;$rate=[double]$delta/$counterSeconds}
             }
-            [pscustomobject]@{InterfaceGuid=$row.InterfaceGuid;Counter=$name;Before=$a;After=$b;ElapsedSeconds=$counterSeconds;IntervalBasis=$intervalBasis;Status=$status;Delta=$delta;PerSecond=$rate;Limitation='Sampled counters; an unseen reset may be undetectable. Errors/discards do not prove a physical fault.'}
+            [pscustomobject]@{TimingContractVersion=1;InterfaceGuid=$row.InterfaceGuid;Counter=$name;Before=$a;After=$b;ElapsedSeconds=$counterSeconds;IntervalBasis=$intervalBasis;Status=$status;Delta=$delta;PerSecond=$rate;Limitation='Approximate rate over query-start intervals; provider samples occur within the retained query windows. An unseen reset may be undetectable. Errors/discards do not prove a physical fault.'}
         }
     }
 }
@@ -180,16 +183,19 @@ function Invoke-ObservationRun {
     param([string]$RepositoryRoot,[ValidateRange(10,600)][int]$DurationSeconds=60,
         [ValidateRange(5,120)][int]$IntervalSeconds=10,[ValidateRange(1,60)][int]$CheckTimeoutSeconds=10,
         [string]$IncidentContextPath,[scriptblock]$CheckExecutor,[scriptblock]$CancelRequested,
-        [string]$TestOutputRoot,[scriptblock]$ElapsedClock,[scriptblock]$WaitAction)
+        [string]$TestOutputRoot,[scriptblock]$ElapsedClock,[scriptblock]$WaitAction,[scriptblock]$WallClock)
+    $wall={if($WallClock){& $WallClock}else{[DateTimeOffset]::Now}}
     $identity=New-SnapshotIdentity
     $outputRoot=Join-Path $RepositoryRoot 'output';if($TestOutputRoot){$outputRoot=$TestOutputRoot}
     $directory=Join-Path $outputRoot ('observation-'+($identity.ComputerName -replace '[^A-Za-z0-9_.-]','_')+'-'+$identity.RunId)
     $null=New-Item -ItemType Directory -Path $directory -ErrorAction Stop
     $manifest=[pscustomobject]@{SchemaVersion=9;ObservationComparisonVersion=3;Mode='Observation';Identity=$identity;CollectionStatus='Incomplete';CompletedAt=$null
         DurationSeconds=$DurationSeconds;IntervalSeconds=$IntervalSeconds;Samples=@();IncidentContext=$null;Error=$null
+        Timing=[pscustomobject]@{ContractVersion=1;Basis='Parent run Stopwatch';CollectionStartedAt=(& $wall).ToString('o');CollectionEndedAt=$null;CollectionElapsedSeconds=$null;FinalizationElapsedSeconds=$null;MeasuredElapsedSeconds=$null;WallClockCollectionSeconds=$null;WallMinusMonotonicSeconds=$null;TerminationReason=$null;FinalizationMeasuredThrough='Before final metadata writes; those writes are excluded'}
         Limitation='Sequential samples, no overlap or queue. Transitions between samples can be missed. A failed sample is not unchanged state. No current-path fault is inferred.'}
     $save={Set-AtomicText (Join-Path $directory 'evidence.json') (ConvertTo-Json -InputObject $manifest -Depth 16)}
-    $watch=[Diagnostics.Stopwatch]::StartNew();$elapsed={if($ElapsedClock){& $ElapsedClock}else{$watch.Elapsed.TotalSeconds}};$previous=$null;$eventEnds=@{};$seen=@{};$sequence=0
+    $origin=[Diagnostics.Stopwatch]::GetTimestamp();$elapsed={if($ElapsedClock){& $ElapsedClock}else{([Diagnostics.Stopwatch]::GetTimestamp()-$origin)/[double][Diagnostics.Stopwatch]::Frequency}};$previous=$null;$eventEnds=@{};$seen=@{};$sequence=0
+    $timingContext=[pscustomobject]@{RunId=$identity.RunId;OriginTicks=$origin;Frequency=[Diagnostics.Stopwatch]::Frequency}
     try{
         & $save
         if($IncidentContextPath){
@@ -199,9 +205,11 @@ function Invoke-ObservationRun {
         }
         while([Math]::Floor($DurationSeconds-(& $elapsed)) -ge 1){
             if($CancelRequested -and (& $CancelRequested)){ $manifest.CollectionStatus='Interrupted';break }
-            $sampleStart=[DateTimeOffset]::Now;$sampleClock=(& $elapsed)
+            $sampleStart=(& $wall);$sampleClock=(& $elapsed)
             $sample=[pscustomobject]@{SchemaVersion=9;ObservationComparisonVersion=3;RunId=$identity.RunId;Sequence=$sequence;StartedAt=$sampleStart.ToString('o');CompletedAt=$null;CollectionStatus='Incomplete';Checks=@();Changes=@();CounterDeltas=@();ActualIntervalSeconds=$null}
-            if($previous){$sample.ActualIntervalSeconds=($sampleStart-[DateTimeOffset]::Parse($previous.StartedAt)).TotalSeconds}
+            $sample | Add-Member NoteProperty Timing ([pscustomobject]@{ContractVersion=1;Basis='Parent run Stopwatch';StartedElapsedSeconds=$sampleClock;CompletedElapsedSeconds=$null;IntervalBasis='Same-run monotonic sample starts'})
+            $sample | Add-Member NoteProperty StatisticsCoverage ([pscustomobject]@{ContractVersion=1;BatchExecutionStatus='NotCollected';ExpectedAdapters=$null;UsableAdapters=0;Status='Not assessed';EvidencePath=$null;Limitation='Adapter inventory or statistics batch not collected; no usable counter coverage established.'})
+            if($previous){$sample.ActualIntervalSeconds=$sampleClock-$previous.Timing.StartedElapsedSeconds}
             $relative='sample-{0:D4}.json' -f $sequence
             $samplePath=Join-Path $directory $relative
             $execute={param($definition)
@@ -235,7 +243,8 @@ function Invoke-ObservationRun {
             }
             $adapters=@($sample.Checks | Where-Object { $_.Name -eq 'Adapters' -and $_.Status -eq 'Success' } | ForEach-Object {$_.Data})
             if($adapters.Count){
-                if(-not (& $execute ([pscustomobject]@{Name='ObservationStatistics';FunctionName='Invoke-ObservationStatistics';Arguments=@{Adapters=$adapters}}))){$complete=$false}
+                $sample.StatisticsCoverage.ExpectedAdapters=$adapters.Count
+                if(-not (& $execute ([pscustomobject]@{Name='ObservationStatistics';FunctionName='Invoke-ObservationStatistics';Arguments=@{Adapters=$adapters;TimingContext=$timingContext}}))){$complete=$false}
                 else{
                     $batch=$sample.Checks[-1];$batchPath='/Checks/'+($sample.Checks.Count-1)
                     foreach($adapter in $adapters){
@@ -247,6 +256,13 @@ function Invoke-ObservationRun {
                         }
                         $sample.Checks+=[pscustomobject]@{Name=('AdapterStatistics:'+$adapter.InterfaceIndex);Status=$status;Data=$data;Error=$error;EvidencePath=$batchPath;AdapterIdentity=$adapter | Select-Object Name,InterfaceIndex,InterfaceGuid}
                     }
+                    $counterFields=@('ReceivedBytes','SentBytes','ReceivedUnicastPackets','SentUnicastPackets','ReceivedPacketErrors','OutboundPacketErrors','ReceivedDiscardedPackets','OutboundDiscardedPackets')
+                    $usable=@($sample.Checks | Where-Object {
+                        $_.Name -like 'AdapterStatistics:*' -and $_.Status -eq 'Success' -and @($_.Data | Where-Object {
+                            $counterRow=$_;@($counterFields | Where-Object {$null -ne $counterRow.Fields.$_}).Count -gt 0
+                        }).Count -gt 0
+                    }).Count
+                    $sample.StatisticsCoverage=[pscustomobject]@{ContractVersion=1;BatchExecutionStatus=$batch.Status;ExpectedAdapters=$adapters.Count;UsableAdapters=$usable;Status=$(if($usable -eq $adapters.Count){'Complete'}elseif($usable){'Partial'}else{'Unavailable'});EvidencePath=$batchPath;Limitation='Execution success does not establish usable counter coverage; individual fields may still be absent.'}
                     Set-AtomicText $samplePath (ConvertTo-Json $sample -Depth 24)
                 }
             }
@@ -275,12 +291,13 @@ function Invoke-ObservationRun {
                 }
             }
             if($complete){$sample.CollectionStatus='Complete'}
-            $sample.CompletedAt=[DateTimeOffset]::Now.ToString('o')
+            $sample.CompletedAt=(& $wall).ToString('o');$sample.Timing.CompletedElapsedSeconds=(& $elapsed)
             Set-AtomicText $samplePath (ConvertTo-Json $sample -Depth 24)
             $manifest.Samples[-1].Status=$sample.CollectionStatus
             $manifest.Samples[-1].Changes=@($sample.Changes | Select-Object Source,Outcome,Coverage,Adapters,ChangedFields,Reasons,BeforeEvidence,AfterEvidence)
             $manifest.Samples[-1].CounterDiscontinuities=@($sample.CounterDeltas | Where-Object Status -eq 'Discontinuity').Count
             $manifest.Samples[-1].Sha256=(Get-FileHash -LiteralPath $samplePath -Algorithm SHA256).Hash
+            $manifest.Samples[-1] | Add-Member NoteProperty StatisticsCoverage $sample.StatisticsCoverage
             & $save
             $previous=$sample;$sequence++
             $remainingWait=[Math]::Min($IntervalSeconds-((& $elapsed)-$sampleClock),$DurationSeconds-(& $elapsed))
@@ -294,13 +311,26 @@ function Invoke-ObservationRun {
         if($manifest.CollectionStatus -ne 'Interrupted'){$manifest.CollectionStatus='Complete'}
     }catch{$manifest.Error=$_.Exception.Message;throw}
     finally{
-        $watch.Stop();$manifest.CompletedAt=[DateTimeOffset]::Now.ToString('o')
+        $collectionEnd=(& $elapsed);$manifest.Timing.CollectionElapsedSeconds=$collectionEnd
+        $manifest.Timing.CollectionEndedAt=(& $wall).ToString('o')
+        $manifest.Timing.WallClockCollectionSeconds=([DateTimeOffset]::Parse($manifest.Timing.CollectionEndedAt)-[DateTimeOffset]::Parse($manifest.Timing.CollectionStartedAt)).TotalSeconds
+        $manifest.Timing.WallMinusMonotonicSeconds=$manifest.Timing.WallClockCollectionSeconds-$collectionEnd
+        $manifest.Timing.TerminationReason=$(if($manifest.Error){'CollectionError'}elseif($manifest.CollectionStatus -eq 'Interrupted'){'Cancelled'}else{'DeadlineBudgetExhausted'})
+        $manifest.CompletedAt=(& $wall).ToString('o')
         try{& $save
             $html='<html><meta charset="utf-8"><h1>Bounded observation</h1><p>'+[Net.WebUtility]::HtmlEncode($manifest.CollectionStatus+' - '+$manifest.Limitation)+'</p>'
             $html+='<p>Complete samples: '+@($manifest.Samples | Where-Object Status -eq 'Complete').Count+'; partial samples: '+@($manifest.Samples | Where-Object Status -ne 'Complete').Count+'</p>'
             foreach($ref in $manifest.Samples){$html+='<p><a href="'+$ref.Path+'">'+[Net.WebUtility]::HtmlEncode($ref.StartedAt)+'</a> '+[Net.WebUtility]::HtmlEncode($ref.Status+'; actual interval seconds: '+$ref.ActualIntervalSeconds+'; counter discontinuities: '+$ref.CounterDiscontinuities)+'</p>'+(ConvertTo-ObservationChangesHtml $ref.Changes)}
+            $htmlBase=$html
             $html+='<details><summary>Session metadata and user report</summary><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest -Depth 16))+'</pre></details></html>'
             Set-AtomicText (Join-Path $directory 'summary.html') $html
+            $manifest.Timing.MeasuredElapsedSeconds=(& $elapsed)
+            $manifest.Timing.FinalizationElapsedSeconds=$manifest.Timing.MeasuredElapsedSeconds-$collectionEnd
+            $manifest.CompletedAt=(& $wall).ToString('o')
+            & $save
+            $timingHtml='<h2>Timing and statistics coverage</h2><p>Requested collection seconds: '+$DurationSeconds+'; measured collection seconds: '+$collectionEnd+'; finalization seconds: '+$manifest.Timing.FinalizationElapsedSeconds+'; termination: '+$manifest.Timing.TerminationReason+'. Actual intervals use the parent run Stopwatch. Wall-clock differences alone do not prove a clock adjustment or deadline violation.</p><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest.Timing -Depth 5))+'</pre>'
+            foreach($ref in $manifest.Samples){$timingHtml+='<p>Sample '+$ref.Sequence+' statistics: '+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $ref.StatisticsCoverage -Compress))+'</p>'}
+            Set-AtomicText (Join-Path $directory 'summary.html') ($htmlBase+$timingHtml+'<details><summary>Session metadata and user report</summary><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest -Depth 16))+'</pre></details></html>')
         }catch{Write-Warning 'Final observation checkpoint failed; earlier files remain recoverable.'}
     }
     [pscustomobject]@{Directory=$directory;Evidence=$manifest}

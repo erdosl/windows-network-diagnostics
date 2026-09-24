@@ -6,7 +6,7 @@ separate bounded observation, explicit interface probes, and offline DHCP/ARP
 analysis. Native capture currently returns an explicit capability refusal;
 it does not start a session. Ordinary snapshots remain passive by default.
 
-Collector `0.5.2` (schema 9) collects bounded Windows 10/11 network snapshots for
+Collector `0.5.3` (schema 9) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -644,6 +644,24 @@ references preserve provenance for an empty enumeration with no data-row referen
 Raw checks remain unchanged. Schema-6/7/8 baselines are re-derived from raw checks
 using the same rules, not their older availability labels. Schema 8 explicitly
 versions this semantic change; collector 0.4.0 cannot read a schema-8 baseline.
+
+### Windows 11 evidence corrections in 0.5.3
+
+Provider details now retain query scope, identity field shapes and match outcomes.
+Snapshot statistics/power queries target escaped literal names; observation
+statistics retain one bounded batch enumeration. Exact installation identities
+can match renamed adapters, while ambiguous/conflicting identities stay unassessed.
+Wi-Fi unavailability uses structured service/capability evidence and retains the
+native response. Observation timing and counter intervals use a shared same-run
+monotonic basis, with collection and finalization durations reported separately.
+Batch execution status and usable statistics coverage are separate.
+
+Supplied Windows 11 evidence exercised core collection and DHCP comparisons.
+Statistics and power behavior remain under investigation pending Windows 11
+retesting; neither the VM nor Windows 11 has been established as the cause.
+See [findings, validation and read-only retest commands](docs/WINDOWS11-FINDINGS.md).
+Root schema 9 and DHCP comparison contract 3 remain unchanged; new provider,
+Wi-Fi and timing evidence has scoped contract version 1.
 
 ### Observation corrections in 0.5.2
 

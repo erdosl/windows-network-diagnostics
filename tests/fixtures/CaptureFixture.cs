@@ -15,12 +15,19 @@ namespace NetworkDiagnostics.Tests {
    b[d+236]=99;b[d+237]=130;b[d+238]=83;b[d+239]=99;Array.Copy(options,0,b,d+240,options.Length);return b;
   }
   static byte[] Arp(byte mac){byte[] b=new byte[42];b[6]=2;b[11]=mac;BE16(b,12,0x806);BE16(b,14,1);BE16(b,16,0x800);b[18]=6;b[19]=4;BE16(b,20,2);b[22]=2;b[27]=mac;b[28]=192;b[30]=2;b[31]=1;return b;}
-  public static void Write(string path) {
+  public static void Write(string path) { WriteVlan(path,new ushort[0],new ushort[0],new ushort[0],new ushort[0],false); }
+  static byte[] Tag(byte[] frame,ushort[] tpids,ushort[] tcis,bool truncate) {
+   if(truncate){byte[] shortFrame=new byte[16];Array.Copy(frame,shortFrame,12);BE16(shortFrame,12,0x8100);return shortFrame;}
+   byte[] result=new byte[frame.Length+4*tpids.Length];Array.Copy(frame,result,12);
+   for(int i=0;i<tpids.Length;i++){BE16(result,12+4*i,tpids[i]);BE16(result,14+4*i,tcis[i]);}
+   Array.Copy(frame,12,result,12+4*tpids.Length,frame.Length-12);return result;
+  }
+  public static void WriteVlan(string path,ushort[] tpidA,ushort[] tciA,ushort[] tpidB,ushort[] tciB,bool truncate) {
    using(var w=new BinaryWriter(File.Create(path))) {
     using(var s=new MemoryStream()) {var b=new BinaryWriter(s);b.Write((uint)0x1a2b3c4d);b.Write((ushort)1);b.Write((ushort)0);b.Write((long)-1);Block(w,0x0a0d0d0a,s.ToArray());}
     Block(w,1,new byte[]{1,0,0,0,0xff,0xff,0,0});
     byte[][] frames={Dhcp(2,1,10),Dhcp(2,2,10),Dhcp(3,2,10),Dhcp(5,2,10),Dhcp(6,1,10),Dhcp(2,1,11),Arp(1),Arp(2)};
-    foreach(byte[] frame in frames)using(var s=new MemoryStream()){var b=new BinaryWriter(s);b.Write((uint)0);b.Write((uint)0);b.Write((uint)1000000);b.Write((uint)frame.Length);b.Write((uint)frame.Length);b.Write(frame);Block(w,6,s.ToArray());}
+    for(int i=0;i<frames.Length;i++)using(var s=new MemoryStream()){byte[] frame=Tag(frames[i],i%2==0?tpidA:tpidB,i%2==0?tciA:tciB,truncate);var b=new BinaryWriter(s);b.Write((uint)0);b.Write((uint)0);b.Write((uint)1000000);b.Write((uint)frame.Length);b.Write((uint)frame.Length);b.Write(frame);Block(w,6,s.ToArray());}
    }
   }
  }

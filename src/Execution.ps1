@@ -44,6 +44,6 @@ function Invoke-BoundedCheck {
         $watch.Stop()
     }
     [pscustomobject]@{ Name = $Definition.Name; StartedAt = $start.ToString('o'); CompletedAt = [DateTimeOffset]::Now.ToString('o')
-        DurationMs = $watch.ElapsedMilliseconds; TimeoutSeconds = $TimeoutSeconds; WorkerProcessId = $workerId
+        DurationMs = $watch.ElapsedMilliseconds; DurationBasis='Parent check Stopwatch including startup and cleanup'; TimeoutSeconds = $TimeoutSeconds; WorkerProcessId = $workerId
         Request = $Definition.Arguments; Status = $result.Status; TimeoutScope = $(if ($result.Status -eq 'TimedOut') { 'Worker' } else { $null }); Data = @($result.Data); Error = $result.Error }
 }

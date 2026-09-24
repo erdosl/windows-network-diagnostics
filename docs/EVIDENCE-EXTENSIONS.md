@@ -1,9 +1,45 @@
+# Windows 11 corrections in 0.5.3
+
+See [Windows 11 findings and validation](WINDOWS11-FINDINGS.md). Root schema 9,
+ContextEvidence contract 3, DHCP ObservationComparisonVersion 3, and the existing
+VLAN contracts are unchanged. These additions introduce independently scoped
+contracts rather than reinterpret DHCP or baseline comparison data:
+
+- Adapter detail `ProviderDiagnostic.ContractVersion=1`: query scope/status,
+  row count, raw identity field values/property names, match basis/outcome and
+  whether the error came from the native provider. Absent, present-unmatched,
+  ambiguous, conflicting and failed-query cases differ. Errors retain original
+  message, ID, category, exception type, HResult and exposed NativeErrorCode.
+- Wi-Fi data or `Error.Evidence.ContractVersion=1`: native exit/text, structured
+  service and complete/failed adapter inventory provenance, availability reason.
+- Observation manifest/sample `Timing.ContractVersion=1`: parent run monotonic
+  scheduling/intervals, requested duration, measured collection/finalization,
+  wall-clock collection difference and termination reason. Finalization measurement
+  ends before final metadata writes; their cost cannot be included in the metadata
+  being written. CompletedAt has the same boundary. Initial directory/identity
+  setup precedes the measured collection phase.
+- Counter rows `CounterTiming.ContractVersion=1`: query windows measured with
+  system Stopwatch.GetTimestamp, using the explicitly serialized parent origin,
+  frequency and run ID. This is one machine-wide counter, not subtraction of
+  independently started worker Stopwatches. Delta `TimingContractVersion=1`
+  requires matching run identity and nonoverlapping monotonic query windows.
+  Rates approximate intervals between query starts; actual samples occur within
+  those windows. Older wall-clock-only counters are unassessed, not silently
+  assigned rates. Raw legacy evidence remains readable.
+- Sample/reference `StatisticsCoverage.ContractVersion=1`: batch execution status,
+  expected and usable adapter counts, coverage status and batch check reference.
+  Usable means at least one of the eight compared counter fields is present;
+  individual missing fields remain unavailable. No zero counters are synthesized.
+
+The original 0.5.2 description below documents prior behavior; 0.5.3 replaces its
+name-only matching, snapshot-wide provider enumeration and wall-clock rate basis.
+
 # Observation corrections in 0.5.2
 
 Root schema remains 9; snapshot ContextEvidence contract remains 3. Observation
 comparison/state contract changes from 2 to 3. Prior raw samples may be rederived;
 older derived DHCP state is not silently compared using the new semantics.
-
+The existing uncommitted VLAN contracts remain unchanged.
 
 Both BeforeAdapterContext and AfterAdapterContext are arrays: absent contexts are
 [], never [null]. Valid objects retain null-valued properties. This representation
@@ -42,6 +78,49 @@ Real-machine performance and provider behavior require user validation; a ten-se
 cadence is not promised.
 
 # Evidence extensions: 0.5.0 / schema 9
+
+## Targeted corrections in 0.5.1
+
+Root schema **9** and snapshot `ContextEvidence.ContractVersion=3` are unchanged.
+The following scoped contracts explicitly version new derived semantics; existing
+raw checks, baseline loading, time budgets and passive defaults are unchanged.
+
+- Observation manifests and samples now carry `ObservationComparisonVersion=2`.
+  DHCP state uses `ContractVersion=2`; older derived DHCP state is not directly
+  compared (Not assessed). Re-derive it from raw checks to apply the new rules.
+  The same source-level comparison rows remain, with added `ChangedFields`,
+  `Reasons` and limitations, and existing before/after sample/run references.
+- Offline analysis uses `CaptureCorrelationVersion=2`; decoder output carries
+  `VlanMetadataVersion=1`. Each decoded Ethernet DHCP/ARP record adds `VlanTags`,
+  an ordered array containing TPID, TCI, VlanId, PCP and DEI. Untagged frames have
+  `[]`. Correlation adds a readable `VlanScope` to transaction/ARP observations.
+
+DHCP comparisons retain the collector's DHCPServer, DNSDomain, DHCPLeaseObtained
+and DHCPLeaseExpires alongside DHCPEnabled, DefaultIPGateway and DNSServerSearchOrder.
+Configuration records join adapter inventory within each sample by interface index,
+then compare across samples using unique normalized SettingID/InterfaceGuid, never
+array position, alias or MAC. Conflicting/malformed/duplicate identities, missing
+records/properties and failed inventories are Not assessed with reasons. Reported
+null and explicit empty arrays remain distinct from missing properties; changes
+to null describe collected values, not proof of configuration removal.
+
+A configuration difference is `Changed`, even if lease dates also change. Only
+lease timestamp differences produce `LeaseRefreshed`; equal assessed fields are
+`Unchanged`. LeaseRefreshed does not establish a captured renewal, and a server
+change does not imply competing DHCP servers, malicious behavior or a network
+fault. JSON and expandable HTML retain changed-field before/after values, value
+states, identities and raw record paths scoped by the enclosing sample references.
+
+VLAN grouping uses capture section/interface plus ordered TPID/VLAN-ID pairs.
+PCP/DEI remain raw observations but do not split a VLAN scope. Untagged is distinct
+from a priority tag with VID 0; differently ordered double-tag stacks remain
+separate. The supported TPIDs remain 0x8100 and 0x88A8, at most two tags. Truncated,
+third-tag and recognized unsupported-TPID frames yield explicit partial/unsupported
+evidence and a raw block reference; raw artifacts are retained. Older decoded
+packets without tag metadata, or with invalid/inconsistent metadata, produce
+Not assessed correlation coverage and are not merged as untagged. Re-decoding the
+original pcapng supplies VLAN evidence; no new capture format or live capture
+backend is introduced.
 
 This milestone is divided into four reviewable source/test groups. Ordinary
 snapshots stay passive. No network changes, renew/release, reset, reconnect,

@@ -98,6 +98,51 @@ Run the commands above in a normal Windows terminal to validate real persistence
 Optional passive validation from the repository:
 powershell.exe -NoProfile -File .\Watch-NetworkDiagnostics.ps1 -DurationSeconds 120 -IntervalSeconds 10 -CheckTimeoutSeconds 10
 
+# Targeted observation/VLAN fixes: 0.5.1 (uncommitted)
+
+Started from `52d39d7` with a clean working tree. Windows 10 build 19045,
+non-elevated Windows PowerShell 5.1.19041.7725; effective policy RemoteSigned.
+No policy changes, live probes, captures, DHCP traffic or network changes were run.
+All tests below used normal script execution from the repository directory.
+
+| Command | Exit | Actual result |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-ObservationDhcp.ps1` | 0 | 17 synthetic assertions: server/domain/lease changes, precedence, order/index independence, missing evidence, identity ambiguity, null/empty values, references and HTML escaping |
+| `powershell.exe -NoProfile -File .\tests\Test-CaptureVlan.ps1` | 0 | 16 synthetic-byte assertions: VLAN separation, PCP/DEI, ordered double tags, untagged/VID 0, malformed stacks and old/invalid metadata |
+| `powershell.exe -NoProfile -File .\tests\Test-Observation.ps1` | 0 | 13 existing observation assertions |
+| `powershell.exe -NoProfile -File .\tests\Test-CaptureEvidence.ps1` | 0 | 24 existing synthetic decoder/refusal assertions; import report persistence mocked |
+| `powershell.exe -NoProfile -File .\tests\Test-ObservationModel.ps1` | 0 | 7 existing control-flow assertions with mocked collectors and persistence |
+| `powershell.exe -NoProfile -File .\tests\Test-ObservationRun.ps1` | 1 | Stopped at atomic replacement access denial; complete suite not verified |
+| `powershell.exe -NoProfile -File .\tests\Test-CaptureImport.ps1` | 1 | Stopped at atomic replacement access denial; complete suite not verified |
+| `powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1` | 1 | Reached orchestration persistence, then atomic replacement access denial; complete suite/version assertion not verified |
+
+**77 assertions passed across five suites.** The three unsuccessful runs reported:
+
+```text
+Exception calling "Replace" with "3" argument(s): "Access to the path is denied."
+At src/State.ps1:12
+FullyQualifiedErrorId: UnauthorizedAccessException
+```
+
+Observation additionally warned that its final checkpoint could not be saved.
+No storage/policy workaround or elevated retry was used. The first VLAN test
+attempt encountered a test-harness PowerShell type alias error (`ushort`); it
+was corrected to `uint16` before the successful runs. This was not a decoder pass.
+New fixtures/artifacts remain under ignored output/tests/; no real report was
+modified. `git diff --check` passed. Previous user-run validation below applies
+to 0.5.0 and is not claimed as validation of these changes.
+
+For normal-terminal verification, run the exact commands in the table and record
+`$LASTEXITCODE` after each. The new tests are synthetic and do not access the network.
+Live observation/interface traffic, native capture, elevated execution and Windows
+11 remain unverified. Capture limitations and the deliberately restricted decoder
+remain unchanged. Root schema 9 and DHCP context contract 3 are preserved; explicit
+`ObservationComparisonVersion=2`, `CaptureCorrelationVersion=2` and decoder
+`VlanMetadataVersion=1` document the scoped changes in EVIDENCE-EXTENSIONS.md.
+No commits, pushes or history changes were made for this task.
+
+---
+
 # Final pre-commit review (0.5.0)
 
 The final review tightened proxy redaction to suppress entire values containing a
@@ -1361,3 +1406,101 @@ Generated live snapshots, failed intermediate runs, synthetic reports, backups,
 worker fixtures, and the path-with-spaces validation copy are private files under
 ignored `output/`; none are intended for Git. Earlier milestone inline validation
 is historical and is not claimed as end-to-end validation here.
+# Windows 11 supplied evidence follow-up (2026-09-24, collector 0.5.3)
+
+## Windows 10 milestone assertion follow-up
+
+Publication review: the user subsequently authorized review, commit and push.
+The following review reruns used actual Windows PowerShell 5.1.19041.7725 files
+on Windows 10, each with `powershell.exe -NoProfile -File tests/<name>.ps1`:
+Test-Windows11Evidence (57 assertions), Test-Windows11Worker (5),
+Test-Milestone2Continuation (28-record continuation and 37 negative controls),
+Test-AdapterApipa (26), Test-Observation (13), Test-LiveObservation (29),
+Test-ObservationDhcp (17), Test-ObservationSerialization (25), Test-CaptureVlan
+(16), Test-CaptureEvidence (24), and Test-EntryLoading (8) all exited 0.
+Test-CaptureImport exited 1 at File.Replace with access denied in the sandbox;
+the real offline import persistence path remains unverified there. No live
+capture or connectivity probe was used. Review covered the pending VLAN changes,
+provider/availability diagnostics, timing, test fixtures and documentation; no
+blocking code finding remained. Windows 11 retesting is still pending.
+
+User-reported normal Windows 10 Windows PowerShell 5.1 terminal results, before
+this test correction: Test-ObservationRun passed 5 assertions (exit 0, real atomic
+writes); Test-DhcpOrchestration passed 8 assertions (exit 0); Test-Milestone2 exited
+1 at "Full orchestration continues after timeout". These are distinct from the
+agent sandbox's File.Replace access denial.
+
+The available completed 0.5.3 passive orchestration artifact was inspected read-only:
+28 checks, 27 planned workers, first Windows=TimedOut, 26 subsequent Success
+records, final Connectivity=Skipped, CollectionStatus=Complete, a populated
+CompletedAt, and null PendingCheck/CollectionError. Execution did not stop at
+the timeout. The stale assertion required 22 checks: 12 base collectors + 2
+adapter details + 7 event groups + 1 skipped connectivity record. Three proxy
+checks, two VPN checks and AdapterBindings add six, producing 28. No production
+collector change or version/schema change is needed for this test correction.
+
+The count-only assertion was replaced with an independent expected name/order
+contract covering each family, execution and plan correspondence, subsequent
+statuses and final completion. It checks both returned evidence and the primary
+JSON reread from disk, plus the intermediate checkpoint containing the timeout.
+The shared synthetic collector now supplies timeout scope, error ID/category/message,
+timestamps, duration and budget, so their persistence is tested too. The older
+fixture only supplied timeout status with Error=null; its existing artifact cannot
+validate error/timing fields it never generated. The real worker timeout/descendant
+cleanup tests remain intact. Existing reports were neither altered nor deleted.
+
+Agent rerun commands, Windows PowerShell 5.1.19041.7725 on Windows 10 build 19045,
+non-elevated, no policy override or live probes:
+
+| Exact command | Result |
+| --- | --- |
+| `powershell.exe -NoProfile -File tests/Test-Milestone2Continuation.ps1` | Exit 0; 28-record real orchestration with modeled report persistence, serialized timeout/completion verified; 37 negative controls rejected missing/duplicate/reordered results, lost timeout/errors/completion and plan/execution discrepancies. Not an atomic-write test. |
+| `powershell.exe -NoProfile -File tests/Test-AdditionalOrchestrationModel.ps1` | Exit 0; 8 assertions. |
+| `powershell.exe -NoProfile -File tests/Test-Milestone2.ps1` | Exit 1; File.Replace access denied in the sandbox, after real worker cleanup checks; corrected real-persistence continuation assertion not reached. |
+| `powershell.exe -NoProfile -File tests/Test-ObservationRun.ps1` | Exit 1; File.Replace access denied in the sandbox. User's normal-terminal success above remains valid. |
+| `powershell.exe -NoProfile -File tests/Test-DhcpOrchestration.ps1` | Exit 1; File.Replace access denied in the sandbox. User's normal-terminal success above remains valid. |
+| `git diff --check` | Exit 0. |
+
+The user subsequently reran all three suites in a normal **Windows 10** terminal
+using Windows PowerShell 5.1.19041.7725 and supplied these results:
+
+| Exact user-run command | Result |
+| --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-ObservationRun.ps1` | 5 assertions passed; exit 0; mocked collectors with real atomic writes. |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1` | 8 assertions passed; exit 0. |
+| `powershell.exe -NoProfile -File .\tests\Test-Milestone2.ps1` | 63 assertions passed; exit 0. |
+
+These user-run results validate the corrected milestone suite in the normal
+Windows 10 environment, including continuation after timeout and persisted
+timeout/completion evidence. They are separate from the agent's sandbox failures
+and do not establish Windows 11 provider behavior. Windows 11 retesting remains
+pending.
+
+To inspect recent test artifacts without running collectors or modifying files, use this
+read-only command from the repository root in Windows PowerShell 5.1. Paths and
+timestamps are local diagnostic data; do not commit its output.
+
+```powershell
+Get-ChildItem .\output\tests\orchestration -Recurse -Filter evidence.json |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 5 | ForEach-Object {
+        $e = Get-Content -LiteralPath $_.FullName -Raw | ConvertFrom-Json
+        [pscustomobject]@{Path=$_.FullName; Status=$e.CollectionStatus;
+            Count=@($e.Checks).Count; Planned=@($e.PlannedChecks).Count;
+            CompletedAt=$e.CompletedAt; Pending=$e.PendingCheck; Error=$e.CollectionError} | Format-List
+        $e.Checks | Select-Object Name,Status,TimeoutScope,DurationMs,CompletedAt | Format-Table -AutoSize
+    }
+```
+
+## Earlier Windows 11 investigation validation
+
+See [WINDOWS11-FINDINGS.md](WINDOWS11-FINDINGS.md) for evidence-backed findings,
+unresolved causes, exact Windows PowerShell 5.1 commands/results, contract changes
+and bounded read-only retest commands. Supplied Windows 11 core collection and
+DHCP comparisons were exercised. Statistics/power fixes require Windows 11
+retesting; neither Windows 11 nor VirtualBox is an established cause.
+
+Windows 10 synthetic/provider/clock, worker, recovery-read, DHCP, VLAN, presentation
+and entry-loading suites passed. Real observation, DHCP orchestration and milestone
+persistence suites, plus both passive entry runs, were blocked by File.Replace
+access denied in the restricted development context. Persistence was not weakened.
+Private evidence/extractions remain ignored; no commit or push was made.
