@@ -1,3 +1,8 @@
+> This is a historical validation record. Statements such as "Windows 11
+> remains untested" and requests to rerun collection describe their historical
+> sections, not current coverage. The [completed 0.5.4 Windows 11 follow-up](#completed-targeted-windows-11-follow-up-054)
+> records the latest supplied results separately from Windows 10 sandbox tests.
+
 # Observation serialization follow-up and user validation: 0.5.2
 
 ## User-run evidence (reported separately from agent tests)
@@ -1602,10 +1607,103 @@ observation also reportedly exited 0; the supplied archives independently confir
 complete manifests, eight valid sample hashes, seven complete/one useful partial
 sample and the timing values documented in [WINDOWS11-FINDINGS.md](WINDOWS11-FINDINGS.md).
 
-Live Windows 11 verification of 0.5.4 remains pending. The findings document lists
-only the targeted remaining commands and explains what each distinguishes.
+The targeted Windows 11 verification of 0.5.4 is now completed; see the separately
+attributed latest results below. No repeat full snapshot or observation is required.
 The investigation initially left changes uncommitted and unpushed; the user then
 requested review, commit and push. Review added an immediate completed-inventory
 checkpoint in the inspector and strengthened the missing-short-directory test to
-reject the actual long-path diagnostic text. The existing Windows 11 limitations
-and sandbox persistence failures remain applicable.
+reject the actual long-path diagnostic text. Historical sandbox persistence
+failures remain recorded separately from
+the subsequent Windows 11 successes below.
+
+## Completed targeted Windows 11 follow-up (0.5.4)
+
+Documentation review, 2026-09-25, after collector 0.5.4 was committed and pushed.
+The latest user-run follow-up is completed. This section records Windows 11
+results, not new executions on the Windows 10 development host.
+
+The supplied environment is Windows 11 Enterprise Evaluation build 26200,
+Windows PowerShell 5.1.26100.9444, VirtualBox 7.2.16 on Ubuntu 24. Inspector JSON
+independently records OSVersion 10.0.26200.0, that PowerShell version, collector
+0.5.4, contract 1, Complete collection and non-elevated execution. Coverage is
+limited to this VM, build, runtime and query scopes. The latest four suites'
+privilege/policy settings and exact checkout path are not separately established.
+
+The user reports these normal file executions all exited **0**; no saved console
+transcript is present in `windows-11-files/` for independent transcript review:
+
+| Command | Assertions | Reported coverage |
+| --- | --- | --- |
+| `powershell.exe -NoProfile -File .\tests\Test-ObservationRun.ps1` | 5 | Mocked collectors, real atomic writes |
+| `powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1` | 8 | Synthetic DHCP orchestration |
+| `powershell.exe -NoProfile -File .\tests\Test-PathPortability.ps1` | 6 | Real first publication, replacement, backup and temporary cleanup |
+| `powershell.exe -NoProfile -File .\tests\Test-InventoryBoundaries.ps1` | 40 | Synthetic providers, real bounded worker serialization |
+
+Total **59**, not 63: inspection of Test-PathPortability shows the printed four
+assertions before replacement are a cumulative checkpoint within the final six.
+The reported line "Legacy long temporary creation failed on this runtime."
+confirms failure of the legacy long temporary filename in that experiment.
+The revised writer passed publication, replacement and backup checks. This does
+not establish universal long-path support, identify which of the two accepted
+legacy exception types occurred, or prove every DirectoryNotFoundException is
+path-length-related. The Windows 10 sandbox File.Replace failures above remain
+valid historical results, separate from these subsequent user-run successes.
+
+The user subsequently ran the bounded inspector from a single-level downloaded
+checkout using the command below and reported exit **0**. Its path does not
+establish the location of the four suite runs; no pass from the original doubly
+nested checkout is claimed.
+
+```powershell
+powershell.exe -NoProfile -File .\tests\Inspect-Windows11Providers.ps1 -AdapterName 'Local Area Connection* 6'
+```
+
+Direct inspection of the available `queries.json` confirmed:
+
+| Query | Status | Rows / scoped result |
+| --- | --- | --- |
+| DefaultAdapters | Success | 4 |
+| HiddenAdapters | Success | 16 |
+| CimAdapters | Success | 4 |
+| Adapters (collector) | Success | 16 |
+| WildcardStatistics | Success | 0 |
+| UnfilteredStatistics | Success | 0 |
+| CimStatistics | Success | 0 |
+| AdapterStatistics | Unavailable | Native CmdletizationQuery_NotFound_Name / ObjectNotFound; NativeErrorCode null |
+| AdapterPowerManagement | Failed | Windows System Error 31; CIM NativeErrorCode 1 |
+
+Native hidden-inclusive and collector inventory each have 16 unique GUIDs.
+Comparison by normalized GUID, index, exact alias and description found zero
+differences; both retain all eight WAN miniports and their literal-asterisk aliases.
+The inventory discrepancy therefore did not reproduce. Sequential query intervals
+are distinct; this is not simultaneous state. Four raw CIM rows do not disprove
+the hidden-inclusive inventory because query scopes can differ. The earlier
+eight-adapter result remains unexplained; no collector fix, wildcard defect,
+clock issue or guest-state change is established as its cause.
+
+Zero rows across all three statistics query forms means no matching strategy can
+recover counters from this run. Provider support, permissions, platform defects
+and underlying cause are not established, and no counter rates were validated.
+Both targeted detail checks have LiteralAdapterName scope for WAN Miniport (IP).
+Power retains Microsoft.Management.Infrastructure.CimException with exposed
+NativeErrorCode 1, distinct from Windows error 31 in its native identifier; this
+is not evidence of hardware faults across all adapters. Causes remain unresolved.
+
+Only `queries.json` is currently present in the private evidence directory.
+The 0.5.3 ZIPs and `adapters.txt` are absent, so sample counts, hashes, Wi-Fi status
+and timing cannot be recomputed in this review. The previous verified record is
+preserved: snapshot and observation reported exit 0; seven complete samples,
+one useful partial, no empty samples; all eight hashes matched; monotonic
+collection 119.661219 seconds, finalization 0.1664396 seconds excluding final
+metadata writes, wall-minus-monotonic difference 0.0043927 seconds; Wi-Fi
+Unavailable/WlanServiceStopped. These timings apply only to that run.
+
+Documentation-only checks: reviewed inspector JSON and test source, reconciled
+findings/README/validation claims, checked local Markdown links and anchors,
+ran `git diff --check`, `git check-ignore windows-11-files/queries.json` and
+`git ls-files windows-11-files`. Private evidence remains ignored and untracked.
+No new test suite, live provider query, probe, capture or network change was run;
+no ZIP extraction was needed. No private identifiers or raw report records were
+added to tracked files. No collector/schema/contract version changed. The initial
+documentation review left changes uncommitted and unpushed; the user subsequently
+authorized review, commit and push.

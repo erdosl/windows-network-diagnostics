@@ -652,7 +652,7 @@ The two path-sensitive orchestration tests place synthetic artifacts in unique
 `%TEMP%/output/tests/` directories, independently of checkout length. Production
 output remains under the checkout's `output/`; use a shorter checkout if its
 runtime rejects long paths. Detailed findings, unresolved provider behavior and
-targeted Windows 11 follow-ups are in [WINDOWS11-FINDINGS.md](docs/WINDOWS11-FINDINGS.md).
+completed targeted Windows 11 validation are in [WINDOWS11-FINDINGS.md](docs/WINDOWS11-FINDINGS.md).
 Schema 9 and existing scoped contracts are unchanged.
 
 ### Windows 11 evidence corrections in 0.5.3
@@ -667,9 +667,10 @@ monotonic basis, with collection and finalization durations reported separately.
 Batch execution status and usable statistics coverage are separate.
 
 Supplied Windows 11 evidence exercised core collection and DHCP comparisons.
-Statistics and power behavior remain under investigation pending Windows 11
-retesting; neither the VM nor Windows 11 has been established as the cause.
-See [findings, validation and read-only retest commands](docs/WINDOWS11-FINDINGS.md).
+The targeted 0.5.4 Windows 11 follow-up is complete: inventory agreement and real
+atomic-write portability tests passed in the tested VM. Statistics returned no
+rows and scoped power Error 31 persists; neither the VM nor Windows 11 is an
+established cause. See [findings and completed validation](docs/WINDOWS11-FINDINGS.md).
 Root schema 9 and DHCP comparison contract 3 remain unchanged; new provider,
 Wi-Fi and timing evidence has scoped contract version 1.
 

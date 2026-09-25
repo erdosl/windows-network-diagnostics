@@ -1,166 +1,130 @@
-# Windows 11 follow-up: collector 0.5.4 (2026-09-25)
+# Windows 11 follow-up completed: collector 0.5.4 (2026-09-25)
 
-## Current evidence and conclusions
+## Evidence available for this review
 
-The two latest ZIPs and `adapters.txt` were available in the ignored
-`windows-11-files/` directory. Every ZIP entry was checked for rooted paths,
-drive qualifiers and traversal before reading. JSON was read directly from the
-archives in memory; no extraction was necessary. No private identifiers were
-copied into source or fixtures. The older 16-adapter 0.5.2 results below are
-historical evidence, not a comparison against the Windows 10 development host.
+The ignored `windows-11-files/` directory currently contains only `queries.json`.
+The latest 0.5.3 snapshot/observation ZIPs, `adapters.txt` and a saved console
+transcript are absent. No ZIP was extracted or read during this review. Earlier
+archive findings below are preserved as previously verified evidence, not newly
+recomputed sample counts, hashes or timings. The four latest suite results and
+inspector exit code come from the user's supplied report.
 
-The latest Windows 11 0.5.3 snapshot is Complete with eight adapters. All eight
-observation sample hashes match: seven Complete, one useful Incomplete, none
-empty, each with eight adapters. Collection elapsed is 119.661219 seconds;
-finalization is 0.1664396 seconds excluding final metadata writes; wall minus
-monotonic collection is 0.0043927 seconds. The supplied passive snapshot and
-observation each exited 0. Wi-Fi remains correctly Unavailable/WlanServiceStopped.
-These behaviors and all timing code are preserved.
+The inspector JSON is Complete, collector **0.5.4**, contract **1**, non-elevated,
+with Windows build **10.0.26200.0** and Windows PowerShell **5.1.26100.9444**.
+The supplied environment is Windows 11 Enterprise Evaluation in VirtualBox
+7.2.16 on Ubuntu 24. Coverage is limited to this VM, build, runtime and query
+scope; Windows 10 development results are recorded separately in
+[VALIDATION.md](VALIDATION.md#windows-11-follow-up-2026-09-25-collector-054).
+No private identities or report records are copied into tracked documentation.
 
-The environment remains Enterprise Evaluation build 26200, Windows PowerShell
-5.1.26100.9444, VirtualBox 7.2.16 on Ubuntu 24. NAT and both internal-network
-adapters were connected; the host-only adapter was intentionally disconnected.
-Windows 11 live retesting is unavailable until the user returns to that environment.
+## Current provider observations and unresolved causes
 
-**Inventory cause unresolved.** The direct text confirms four default and 16
-hidden-inclusive adapters. The eight additional rows are the WAN miniports IP,
-Network Monitor, SSTP, L2TP, IKEv2, PPTP, IPv6 and PPPOE, whose aliases contain
-literal asterisks. Other hidden/not-present rows are retained by the collector.
-The direct query was later, so guest/provider state changes remain possible.
+| Inspector query | Status | Returned rows / result |
+| --- | --- | --- |
+| DefaultAdapters | Success | 4 |
+| HiddenAdapters | Success | 16 |
+| CimAdapters | Success | 4 |
+| Adapters (collector) | Success | 16, including all eight WAN miniports |
+| WildcardStatistics | Success | 0 |
+| UnfilteredStatistics (omitted Name) | Success | 0 |
+| CimStatistics | Success | 0 |
+| AdapterStatistics (selected WAN Miniport (IP)) | Unavailable | Native `CmdletizationQuery_NotFound_Name` / ObjectNotFound |
+| AdapterPowerManagement (same selected adapter) | Failed | `Windows System Error 31,Get-NetAdapterPowerManagement` |
 
-Tracing the 0.5.2-to-0.5.3 diff establishes that the inventory invocation did not
-change: `Get-NetAdapter -IncludeHidden -ErrorAction Stop` followed by field
-projection. There is no Name filter, shared literal-query helper, description
-deduplication or state exclusion in this path. The orchestrators retain the
-Adapters check rows. CLIXML serializes explicit worker inputs; worker JSON
-serializes all returned rows. Escaping occurs only in `Invoke-AdapterDetail`,
-after inventory, for statistics and power. Installed Windows 10 generated CDXML
-code filters Name only when that parameter is bound. Its Name query supports
-globbing, so escaped literal targeting is appropriate; spaces need no escaping.
-This local metadata does not prove identical Windows 11 provider behavior.
+**Inventory discrepancy did not reproduce.** Direct comparison of native
+hidden-inclusive and collector rows found 16 unique GUIDs in each, with zero
+differences in normalized GUID, interface index, exact alias and description.
+Both contain all eight WAN miniports, whose aliases contain literal asterisks.
+Queries were sequential, not simultaneous. Raw CIM returning four rows does not
+invalidate hidden-inclusive enumeration: their scopes may differ.
 
-Forty new synthetic assertions verify unfiltered inventory, 14 distinct ordinary,
-wildcard-character, hidden WAN and not-present tunnel rows, similar descriptions,
-real worker serialization, literal statistics/power boundaries, and error streams.
-They establish that these code paths preserve the supplied synthetic rows; they
-do not establish what the Windows 11 native provider originally returned. Complete
-inventory enables valid DHCP comparison. Removing one inventory row leaves all
-14 DHCP records visible and the unmatched record explicitly unassessed. No DHCP
-records have been suppressed to conceal the discrepancy. There is no demonstrated
-collector inventory-loss defect to fix yet.
+The earlier 0.5.3 eight-adapter snapshot/observation result remains unexplained.
+No collector fix, wildcard defect, clock issue or guest-state change has been
+established as the cause of the difference. The earlier code review found the
+inventory invocation unchanged: `Get-NetAdapter -IncludeHidden -ErrorAction Stop`
+followed by projection, without a Name filter or adapter exclusion. Literal
+escaping applies to detail queries after inventory. The 40 synthetic inventory
+assertions and this native inspector run demonstrate preservation in their tested
+scopes, not what the native provider returned during the earlier collection.
 
-**Statistics cause unresolved.** Each latest observation batch has successful
-query execution but ProviderRowsAbsent/RowCount=0; targeted snapshot calls retain
-CmdletizationQuery_NotFound_Name/ObjectNotFound. There are no rows to match and
-no rates. The actual batch invocation is `Get-NetAdapterStatistics -Name '*'
--IncludeHidden -ErrorAction Stop`. The asterisk is deliberately unescaped and
-selects the whole batch; literal aliases are escaped only for detail calls.
-No error stream is discarded. Tests now exercise empty success, thrown failure,
-native-style nonterminating error promotion, present-unmatched rows and a match.
-Both batch and targeted nonterminating errors become query failures rather than
-successful empty results. Existing bounded batching and counter coverage remain.
+**Statistics absence extends beyond collector identity matching.** Wildcard,
+omitted-Name and raw CIM enumeration all succeeded with zero rows. There are no
+returned rows for matching to recover in this run. The selected literal query
+retains its native NotFound_Name error and `LiteralAdapterName` scope; its exposed
+NativeErrorCode is null. This evidence does not establish an unsupported, broken,
+permission-limited or VirtualBox-defective provider. No counter rates were validated.
+Successful query execution is separate from usable counter coverage.
 
-Near-contemporaneous Windows 11 comparisons of wildcard, omitted-Name and raw
-CIM statistics queries are still missing. The follow-up below supplies them.
-Raw CIM uses the installed CDXML class `MSFT_NetAdapterStatisticsSettingData`;
-different results would distinguish a query-layer discrepancy for further review,
-not prove a driver failure. Raw CIM and cmdlet scopes may differ. No speculative
-fallback counters, zero counters or VirtualBox diagnosis were introduced.
+**Scoped power Error 31 persists.** The selected WAN Miniport (IP) query is Failed,
+with `LiteralAdapterName` scope and the Windows error identifier above. Its
+`Microsoft.Management.Infrastructure.CimException` exposes NativeErrorCode **1**,
+which is distinct from Windows error **31** in the identifier. The original
+message and error fields remain in private evidence; NativeErrorCode is not a
+parsed Windows error number. This targeted result does not diagnose hardware
+faults across adapters. The underlying cause remains unresolved. Earlier 0.5.3
+literal power failures are historical evidence, not additional targets tested
+by this inspector.
 
-**Power behavior unresolved; attribution preserved.** All eight latest literal
-queries retain `Windows System Error 31,Get-NetAdapterPowerManagement` and
-QueryScope=LiteralAdapterName. Their CIM NativeErrorCode is **1**, separately
-from **31** in the Windows error identifier/message. `NativeErrorCode` continues
-to mean the exception's exposed field, with ExceptionType identifying its source;
-it is not a parsed Windows error number. Messages, identifiers, category, HResult,
-requested identity and scope are preserved. No conversion to unsupported,
-access-denied or eight hardware faults is justified. No global power fallback,
-elevation requirement or network/service change was added.
+## Confirmed Windows 11 portability validation
 
-**Confirmed portability weakness, Windows 11 exception mechanism not isolated.**
-Both affected tests built output beneath a potentially long checkout, then added
-a descriptive test directory/full GUID, a computer/run directory/full GUID and
-an atomic filename containing another full GUID. Production output shares the
-run-directory and atomic-name overhead and can encounter the same limits.
-The unchanged Windows 11 suites passing after relocation strongly supports path
-sensitivity, but DirectoryNotFoundException alone is not proof of MAX_PATH.
+The user reports all four targeted suites exited **0**: Test-ObservationRun
+(**5** assertions, mocked collectors and real atomic writes), Test-DhcpOrchestration
+(**8**), Test-PathPortability (**6**) and Test-InventoryBoundaries (**40**, synthetic
+providers and real worker serialization). Total: **59** assertions. Source review
+of Test-PathPortability confirms its printed **4** is an intermediate checkpoint
+within the final **6**, not four additional assertions.
 
-ObservationRun and DhcpOrchestration now use unique short temporary working roots
-under `%TEMP%/output/tests/<full GUID>`, keeping source loading independent of
-artifact placement. Test-LongCheckout copies only source/tests into a synthetic
-171-character checkout with spaces and runs both suites without skipping writes.
-Separate Test-EntryLoading coverage still loads actual entries and dot-sources
-from another working directory and a path with spaces.
+The reported portability output says "Legacy long temporary creation failed on
+this runtime." Revised first publication, atomic replacement, backup preservation
+and temporary cleanup passed. This supplies real Windows 11 validation of the
+shorter atomic temporary basename and orchestration persistence. It does not
+establish universal long-path support or that every DirectoryNotFoundException
+is caused by path length. The suite accepts either PathTooLongException or
+DirectoryNotFoundException for the legacy experiment; the reported line alone
+does not identify which occurred.
 
-Atomic temporary files now use a full GUID basename in the destination directory,
-rather than append the GUID to the report name. Exclusive creation, same-volume
-atomic replacement, flush, recovery backups, retry behavior and parent-only
-persistence remain. Actual PathTooLongException gets a shorter-path explanation
-and retains the native InnerException. DirectoryNotFoundException gets a cautious
-long-path hint only when the parent is observed present and a persistence path is
-at least 260 characters; ordinary missing short directories retain their error.
-No blanket length rejection, machine setting, policy change or non-atomic fallback
-was introduced. Long directory creation can also fail before persistence starts;
-a shorter checkout remains appropriate for production on affected runtimes.
+The exact checkout path for these four tests is not established. The later
+provider inspector was run from a single-level downloaded checkout; that does
+not prove the four tests ran there or in the original doubly nested checkout.
+Latest suite elevation and execution-policy settings are not recorded separately.
+The inspector JSON establishes non-elevated execution only for its own run.
 
-Windows 10 accepted the old 261-character temporary filename, so the Windows 11
-failure was not reproduced here. A genuinely unsupported filename exercised the
-specific path error, and the new first atomic publication succeeded in the long
-directory. Replacement then failed with sandbox File.Replace access denial.
-That is an access-control restriction, not evidence of a path-length cause.
+Historical Windows 10 sandbox File.Replace access denials remain recorded in
+VALIDATION.md. Those failures and the subsequent Windows 11 user-run successes
+are distinct results. No access-control workaround or weaker persistence is implied.
 
-Collector patch version is **0.5.4**. Root schema **9**, context **3**, DHCP
-observation comparison **3**, and provider/Wi-Fi/timing contracts **1** remain
-unchanged. Only persistence mechanics/diagnostics and tests change behavior;
-collector inventory/statistics/power selection semantics remain unchanged.
+## Preserved 0.5.3 snapshot and observation evidence
 
-## Validation and remaining Windows 11 commands
+The previous review verified a Complete passive snapshot with eight adapters and
+eight observation samples: **seven Complete, one useful Incomplete, none empty**,
+each with eight adapters. **All eight hashes matched.** The user reported exit
+**0** for both passive entry runs. Wi-Fi was correctly
+**Unavailable/WlanServiceStopped**.
 
-See [the exact Windows 10 commands and results](VALIDATION.md#windows-11-follow-up-2026-09-25-collector-054).
-Twenty suites passed here; real replacement suites and both passive entry runs
-remain blocked by File.Replace denial. Supplied Windows 11 results are separately
-recorded there: ten suites, 208 assertions, all exit 0; ObservationRun and
-DhcpOrchestration passed after moving to the shorter checkout. Those results
-predate these edits and include synthetic providers, not universal live validation.
+Monotonic collection elapsed was **119.661219 seconds**; finalization was
+**0.1664396 seconds**, excluding final metadata writes. Wall-minus-monotonic
+collection difference was **0.0043927 seconds** (approximately **4.4 ms**).
+These measurements describe that run only. The missing ZIPs prevent independent
+reverification in this documentation review; the inspector JSON cannot substitute
+for observation artifacts. Earlier `adapters.txt` findings are likewise historical.
 
-Only these targeted follow-ups are needed on Windows 11, without elevation or
-execution-policy overrides:
+## Follow-up status and scope
 
-```powershell
-# From the original long checkout: tests use short artifact roots.
-powershell.exe -NoProfile -File .\tests\Test-ObservationRun.ps1
-powershell.exe -NoProfile -File .\tests\Test-DhcpOrchestration.ps1
-powershell.exe -NoProfile -File .\tests\Test-PathPortability.ps1
-powershell.exe -NoProfile -File .\tests\Test-InventoryBoundaries.ps1
+The latest targeted Windows 11 follow-up is **completed**. See
+[the supplied validation record](VALIDATION.md#completed-targeted-windows-11-follow-up-054)
+for commands and provenance. No additional full snapshot or observation is
+currently required for these documentation changes. Provider causes remain open;
+any future investigation should be driven by new evidence rather than a presumed
+collector defect. A selected DHCP server and successful client probes do not
+assess competing DHCP servers on the LAN.
 
-# From a short checkout. Substitute one exact observed miniport alias.
-powershell.exe -NoProfile -File .\tests\Inspect-Windows11Providers.ps1 -AdapterName 'Local Area Connection* N'
-```
-
-The first two distinguish source checkout length from persistence location and
-verify real orchestration writes. PathPortability checks missing-directory versus
-unsupported-path errors, first publication, replacement, backups and temporary
-cleanup; it reports whether the old 261-character temporary name fails locally.
-InventoryBoundaries verifies worker preservation and DHCP/error behavior on that
-PowerShell runtime using synthetic providers.
-
-The inspector runs each query in its own ten-second worker, serializes explicit
-inputs, checkpoints only in the parent and leaves private evidence under output/.
-It records generated cmdlet definitions, default/hidden/raw-CIM adapter inventories,
-wildcard/omitted-Name/raw-CIM statistics, and the collector inventory in the same
-session. Only if the supplied literal alias uniquely matches does it query scoped
-statistics and power. It never globally enumerates power. Compare stable GUIDs and
-raw rows, not array positions; sequential queries still permit state changes.
-This distinguishes a persistent native/collector discrepancy from the current
-non-contemporaneous evidence, and documents Windows 11 parameter semantics and
-error provenance. No active probes, captures or configuration changes occur.
-The inspector is parser-validated here; Windows 11 live provider results remain
-pending. Timing and full 120-second observation need no repeat just for these edits.
-
-Private evidence remains ignored/untracked; existing reports are untouched.
-The investigation initially left changes uncommitted and unpushed. The user then
-explicitly requested review, commit and push of this follow-up. Review added an
-immediate inventory checkpoint to the bounded inspector before targeted queries.
+Collector **0.5.4** was already committed and pushed before this review. Root
+schema **9**, context **3**, DHCP observation comparison **3**, and provider/Wi-Fi/
+timing contracts **1** are unchanged. This review changes documentation only;
+no collector behavior, versions, probes, capture or network settings were changed.
+Private evidence remains ignored and untracked; existing reports are untouched.
+The initial documentation review left changes uncommitted and unpushed; the user
+subsequently authorized review, commit and push.
 
 # Historical Windows 11 investigation: collector 0.5.3
 
@@ -318,9 +282,13 @@ PowerShell 5.1.19041.7725: Test-ObservationRun passed 5 assertions with real ato
 writes, Test-DhcpOrchestration passed 8, and the corrected Test-Milestone2 passed
 63; all exited 0. See [the validation follow-up](VALIDATION.md#windows-10-milestone-assertion-follow-up).
 These normal-terminal results are separate from the sandbox failures above and
-do not replace the pending Windows 11 provider retests.
+did not establish Windows 11 provider behavior; see the completed follow-up above.
 
-## Windows 11 read-only retest checklist
+## Historical Windows 11 read-only retest checklist (superseded)
+
+The subsequent 0.5.3 passive runs and completed 0.5.4 targeted follow-up above
+supersede this checklist. These commands are retained as historical context;
+another snapshot or observation is not currently required.
 
 1. From the repository on Windows 11, run the two passive entry commands below
    non-elevated. Retain JSON/HTML and their backups privately. Record OS/PowerShell
