@@ -56,8 +56,41 @@ function Read-DiagnosticEvidence {
 function New-SnapshotIdentity {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     [pscustomobject]@{ ComputerName = [Environment]::MachineName; RunId = [guid]::NewGuid().ToString('D')
-        CollectorVersion = '0.5.4'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        CollectorVersion = '0.6.0'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         StartedAt = [DateTimeOffset]::Now.ToString('o') }
+}
+
+function New-DiagnosticRunDirectory {
+    param([string]$RepositoryRoot,[string]$OutputRoot,[string]$Mode,$Identity)
+    if(-not $OutputRoot){$OutputRoot=Join-Path $RepositoryRoot 'output'}
+    $resolved=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputRoot)
+    $directory=Join-Path $resolved ($Mode.ToLower()+'-'+($Identity.ComputerName -replace '[^A-Za-z0-9_.-]','_')+'-'+$Identity.RunId)
+    if([IO.Directory]::Exists($directory) -or [IO.File]::Exists($directory)){throw "Run destination already exists: $directory"}
+    $null=[IO.Directory]::CreateDirectory($directory)
+    # Protect a custom output root inside a Git worktree too, without editing
+    # the caller's root ignore file or any pre-existing report directory.
+    [IO.File]::WriteAllText((Join-Path $directory '.gitignore'),"*`r`n")
+    Write-Host "Run directory: $directory"
+    $directory
+}
+
+function Get-RunMetadata {
+    param($Identity,[string]$Mode)
+    $buildRevision=$null;$buildStatus='Unavailable';$buildReason='No embedded build revision; Git is not required or invoked at collection time.'
+    $buildPath=Join-Path $PSScriptRoot 'BuildInfo.json'
+    if([IO.File]::Exists($buildPath)){
+        try{
+            if((Get-Item -LiteralPath $buildPath).Length -gt 4096){throw 'Embedded build metadata exceeds 4096 bytes.'}
+            $build=[IO.File]::ReadAllText($buildPath) | ConvertFrom-Json -ErrorAction Stop
+            if($build.CollectorVersion -ne $Identity.CollectorVersion -or $build.Revision -notmatch '^[0-9a-f]{40}$'){throw 'Embedded build version/revision invalid.'}
+            $buildRevision=[string]$build.Revision;$buildStatus='Embedded';$buildReason='Packaged src/BuildInfo.json; does not assert that local files are unmodified.'
+        }catch{$buildStatus='Unavailable';$buildReason=$_.Exception.Message}
+    }
+    [pscustomobject]@{ContractVersion=1;CollectorVersion=$Identity.CollectorVersion;Mode=$Mode;RunId=$Identity.RunId
+        Runtime=[pscustomobject]@{Version=$PSVersionTable.PSVersion.ToString();Edition='Windows PowerShell';Provenance='Executing PowerShell process'}
+        OS=[pscustomobject]@{Version=[Environment]::OSVersion.Version.ToString();Provenance='System.Environment.OSVersion (may be compatibility affected)';WindowsCheckPath=$null;Status='RuntimeReported';Reason='Authoritative Windows provider evidence, when collected, remains in Checks.'}
+        BuildRevision=$buildRevision;BuildRevisionStatus=$buildStatus;BuildRevisionReason=$buildReason
+        Contracts=[pscustomobject]@{Schema=10;Publication=1;Analysis=1;Context=4;ObservationComparison=4;Timing=1;LeaseTimestamp=1}}
 }
 
 function Get-InterfaceSummary {

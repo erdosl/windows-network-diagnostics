@@ -1,7 +1,7 @@
 function Invoke-SnapshotRun {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$RepositoryRoot,
-        [string]$PreviousSnapshotPath, [string]$ExpectationsPath, [string]$IncidentContextPath,
+        [string]$PreviousSnapshotPath, [string]$ExpectationsPath, [string]$IncidentContextPath,[string]$OutputRoot,
         [ValidateRange(1,168)][int]$LookbackHours = 24,
         [ValidateRange(1,1000)][int]$MaxEventsPerLog = 200,
         [ValidateRange(1,1000)][int]$MaxNicEvents = 200,
@@ -30,10 +30,9 @@ function Invoke-SnapshotRun {
     }
     $identity = New-SnapshotIdentity
     $computer = $identity.ComputerName -replace '[^A-Za-z0-9_.-]', '_'
-    $outputRoot = $(if ($TestOutputRoot) { $TestOutputRoot } else { Join-Path $RepositoryRoot 'output' })
-    $directory = Join-Path $outputRoot ("snapshot-$computer-$($identity.RunId)")
-    $null = New-Item -Path $directory -ItemType Directory -ErrorAction Stop
-    $evidence = [pscustomobject]@{ SchemaVersion = 9; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    if($TestOutputRoot){$OutputRoot=$TestOutputRoot}
+    $directory=New-DiagnosticRunDirectory $RepositoryRoot $OutputRoot 'Snapshot' $identity
+    $evidence = [pscustomobject]@{ SchemaVersion = 10; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()
@@ -45,19 +44,20 @@ function Invoke-SnapshotRun {
             ProbeInterfaceIndex=$ProbeInterfaceIndex;ProbeSourceAddress=$ProbeSourceAddress;MaxInterfaceProbes=$MaxInterfaceProbes
             TcpDestinations = $TcpDestinations; TcpPort = $TcpPort; DnsQueryName = $DnsQueryName
             HttpsEndpoint = $HttpsEndpoint; ProbeTimeoutSeconds = $ProbeTimeoutSeconds; ProbeWorkerOverheadSeconds = $ProbeWorkerOverheadSeconds }
-        ContextInputs = @(); Checks = @(); Findings = Get-DiagnosticFindings @(); CollectionError = $null }
+        ContextInputs = @(); Checks = @(); Findings = $null; CollectionError = $null }
+    $evidence | Add-Member NoteProperty Metadata (Get-RunMetadata $identity 'Snapshot')
     $source = Join-Path $RepositoryRoot 'src'
     # This closure runs only in the parent. All worker inputs are serialized explicitly.
     $save = {
         $evidence.Revision++
-        $evidence.Findings = Get-DiagnosticFindings $evidence.Checks
-        $null = Write-DiagnosticReport $evidence $directory
+        $null = Write-DiagnosticReport $evidence $directory -RawOnly
         if ($null -ne $CheckpointObserver) { & $CheckpointObserver $evidence $directory }
     }
     $execute = {
         param($definition)
         $evidence.PlannedChecks += $definition.Name
         $evidence.PendingCheck = $definition.Name
+        Write-Progress -Activity 'Collecting snapshot evidence' -Status ('Running: '+$definition.Name)
         if($ProbeInterfaceIndex -and $definition.FunctionName -eq 'Invoke-ConnectivityProbe'){
             $definition.Arguments.RequestedInterfaceIndex=$ProbeInterfaceIndex
             $definition.Arguments.RequestedSourceAddress=$ProbeSourceAddress
@@ -84,7 +84,7 @@ function Invoke-SnapshotRun {
             try{
                 $incidentPath=$ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($IncidentContextPath)
                 & $execute ([pscustomobject]@{Name='IncidentContext';FunctionName='Read-IncidentContext';Arguments=@{Path=$incidentPath}})
-            }catch{$failure=$_;$evidence.Checks+=Invoke-DiagnosticCheck 'IncidentContext' {throw $failure}; & $save}
+            }catch{if($_.Exception.Data['ArtifactStage']){throw};$failure=$_;$evidence.Checks+=Invoke-DiagnosticCheck 'IncidentContext' {throw $failure}; & $save}
         }
         foreach ($inputSpec in @(@('Baseline',$PreviousSnapshotPath),@('Expectations',$ExpectationsPath))) {
             if (-not $inputSpec[1]) { continue }
@@ -154,12 +154,14 @@ function Invoke-SnapshotRun {
         $evidence.CompletedAt = [DateTimeOffset]::Now.ToString('o')
         & $save
     } catch {
-        $evidence.CollectionStatus = 'Incomplete'
-        $evidence.CompletedAt = $null
+        $failure=$_
+        if($evidence.CollectionStatus -ne 'Complete'){$evidence.CompletedAt = $null}
         $evidence.CollectionError = $_.Exception.Message
         # Best effort: a previous atomic checkpoint remains readable even if storage has failed.
-        try { $null = Write-DiagnosticReport $evidence $directory } catch { }
-        throw
+        try { Write-CanonicalEvidence $evidence (Join-Path $directory 'evidence.json') } catch { $failure.Exception.Data['RecoveryPublicationError']=$_ }
+        throw $failure
     }
+    $null=Write-DiagnosticReport $evidence $directory
+    Write-Progress -Activity 'Collecting snapshot evidence' -Completed
     [pscustomobject]@{ JsonPath = (Join-Path $directory 'evidence.json'); HtmlPath = (Join-Path $directory 'summary.html'); Evidence = $evidence }
 }

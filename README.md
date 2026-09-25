@@ -6,9 +6,31 @@ separate bounded observation, explicit interface probes, and offline DHCP/ARP
 analysis. Native capture currently returns an explicit capability refusal;
 it does not start a session. Ordinary snapshots remain passive by default.
 
-Collector `0.5.4` (schema 9) collects bounded Windows 10/11 network snapshots for
+Collector `0.6.0` (schema 10) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
+
+## Quick start and capabilities
+
+```powershell
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -OutputRoot '.\output\reports [local]'
+powershell.exe -NoProfile -File .\Watch-NetworkDiagnostics.ps1 -DurationSeconds 30 -OutputRoot '.\output\reports [local]'
+```
+
+| Mode | Evidence / limits |
+| --- | --- |
+| Snapshot | Passive checks by default; connectivity requires explicit opt-in |
+| Observation | Bounded passive samples, stable-identity comparisons and structured Windows events |
+| Offline verification | `Verify-NetworkDiagnostics.ps1 -Path <evidence.json>`; structure, references and hashes, not authenticity |
+| Native capture/import | Existing safety refusal and VLAN/import behavior preserved; no new external-capture parser |
+
+Read the [current reference](docs/CURRENT.md) for parameters, output placement,
+exit status, schema/contract compatibility, synthetic examples and troubleshooting.
+See the [current validation matrix](docs/VALIDATION-CURRENT.md) for tested coverage
+and restrictions. Version-specific descriptions below retain historical context.
+Raw checks are saved before analysis; final HTML identifies its evidence revision.
+Collection, analysis and publication outcomes are separate. Final JSON or HTML
+failure exits nonzero and leaves earlier artifacts recoverable when available.
 
 ## Run a passive snapshot
 
@@ -35,7 +57,7 @@ or event-log configuration, and never exports Wi-Fi keys or requests credentials
 
 ## Passive logical network map
 
-Every checkpoint includes a logical model derived only from completed successful
+Finalization includes a logical model derived only from completed successful
 snapshot checks. It shows the collecting computer, interface-scoped addresses and
 prefix-derived subnets, candidate routes/default gateways, neighbour-cache
 observations, and any existing probe route predictions/socket endpoints. It adds
@@ -98,7 +120,7 @@ Neighbour data includes `StateRaw`, readable `StateLabel` (unknown values explic
 `Eligibility` and `IncludedInEndpointObservationCount`. All enum/provider values
 remain in raw checks. Coverage reports missing/failed/unavailable checks plus
 unknown Layer 2 and unavailable structured Wi-Fi relationships. Model generation
-is repeated at each saved checkpoint; incomplete snapshot limitations still apply.
+runs at finalization in 0.6.0; raw checkpoints remain frequent and derived status is pending until analysis.
 
 ## Opt-in connectivity tests
 
@@ -519,8 +541,8 @@ Schema **7** introduced `DhcpSummary`, `SnapshotComparison`, `ExpectationAssessm
 `ContextEvidence.ContractVersion=2` identified the schema-7 derived contract;
 0.4.1 uses schema 8 / contract 3 as described below. Existing checks, collection/probe status semantics, findings and logical map remain
 intact. Optional inputs retain their own collection status; they do not count as
-network operation outcomes. Derived sections are regenerated at each atomic
-checkpoint from available evidence; early checkpoints can be incomplete. Source
+network operation outcomes. In 0.6.0, derived sections are generated at finalization;
+early raw checkpoints mark analysis pending. Source
 references now resolve within this report, with explicit snapshot scope. No existing
 reports are modified. Schema-6 and earlier schema-7 baselines are normalized from
 raw `Checks`, so earlier derived serialization artifacts do not create changes.

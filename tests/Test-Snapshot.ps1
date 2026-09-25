@@ -38,7 +38,7 @@ Assert-True ($checks[4].Status -eq 'Unavailable') 'Missing command is explicit'
 Assert-True ($checks[5].Status -eq 'Failed') 'Nonterminating error is caught'
 Assert-True ($checks[6].Data[0] -eq 'continued') 'Collection continues after errors'
 $nativeDenied = Invoke-DiagnosticCheck 'WiFi' { throw 'Function WlanQueryInterface returns error 5: The requested operation requires elevation.' }
-Assert-True ($nativeDenied.Status -eq 'PermissionDenied') 'Native Wi-Fi permission error is classified'
+Assert-True ($nativeDenied.Status -eq 'Failed') 'Unstructured Wi-Fi message alone is not classified as permission denied'
 $partial = Invoke-DiagnosticCheck 'Partial' { 'partial'; throw 'broken' }
 Assert-True ($partial.Status -eq 'Failed' -and $partial.Data.Count -eq 0) 'Partial data is not reported as success'
 $findings = Get-DiagnosticFindings $checks

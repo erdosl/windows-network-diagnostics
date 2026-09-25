@@ -5,14 +5,15 @@ function Invoke-BoundedCheck {
     $start = [DateTimeOffset]::Now
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $worker = $null
-    $scratch = Join-Path $WorkingDirectory ('.worker-' + [guid]::NewGuid().ToString('N'))
+    $scratchRoot=[IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) 'output\tests\network-diagnostics-workers'))
+    $scratch = Join-Path $scratchRoot ([guid]::NewGuid().ToString('N'))
     $result = $null
     $workerId = $null
     try {
         if (-not ('NetworkDiagnostics.WorkerProcess' -as [type])) {
             Add-Type -Path (Join-Path $SourceDirectory 'NativeProcess.cs') -ErrorAction Stop
         }
-        $null = New-Item -ItemType Directory -Path $scratch -ErrorAction Stop
+        $null = [IO.Directory]::CreateDirectory($scratch)
         $inputFile = Join-Path $scratch 'request.clixml'
         $resultFile = Join-Path $scratch 'result.json'
         $sources = @('Core.ps1', 'Events.ps1', 'Collection.ps1', 'Connectivity.ps1') | ForEach-Object { Join-Path $SourceDirectory $_ }
@@ -40,7 +41,7 @@ function Invoke-BoundedCheck {
     } finally {
         if ($null -ne $worker) { $worker.Dispose() }
         # The entire worker tree has been terminated before its private scratch is removed.
-        if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue }
+        if ([IO.Path]::GetFullPath($scratch).StartsWith($scratchRoot+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $scratch)) { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue }
         $watch.Stop()
     }
     [pscustomobject]@{ Name = $Definition.Name; StartedAt = $start.ToString('o'); CompletedAt = [DateTimeOffset]::Now.ToString('o')

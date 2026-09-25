@@ -1,3 +1,10 @@
+# Current contracts and historical changes
+
+Collector 0.6.0 uses schema 10, context/observation comparison contract 4 and
+analysis/publication/metadata contract 1. See [CURRENT.md](CURRENT.md) for current
+semantics. The versioned sections below are historical; counter timing uses
+the 0.5.3 monotonic contract, not the older wall-clock description.
+
 # Persistence portability in 0.5.4
 
 Atomic temporary filenames use a full GUID basename beside the destination,
@@ -48,7 +55,7 @@ name-only matching, snapshot-wide provider enumeration and wall-clock rate basis
 Root schema remains 9; snapshot ContextEvidence contract remains 3. Observation
 comparison/state contract changes from 2 to 3. Prior raw samples may be rederived;
 older derived DHCP state is not silently compared using the new semantics.
-The existing uncommitted VLAN contracts remain unchanged.
+The VLAN contracts, uncommitted at that historical stage and subsequently committed, remained unchanged.
 
 Both BeforeAdapterContext and AfterAdapterContext are arrays: absent contexts are
 [], never [null]. Valid objects retain null-valued properties. This representation

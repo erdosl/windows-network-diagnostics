@@ -12,14 +12,14 @@ $badPath=Join-Path $workspace 'bad input.json'
 $script:checkpointCount=0
 $observer={param($e,$directory)
     $script:checkpointCount++
-    if($script:checkpointCount -eq 1){Assert-Run ($e.CollectionStatus -eq 'Incomplete' -and $e.Checks.Count -eq 0 -and $e.DhcpSummary.CompetingDhcpServers -eq 'Not assessed') 'Initial incomplete checkpoint precedes optional reads'}
+    if($script:checkpointCount -eq 1){Assert-Run ($e.CollectionStatus -eq 'Incomplete' -and $e.Checks.Count -eq 0 -and $e.Analysis.Status -eq 'Pending' -and $null -eq $e.DhcpSummary) 'Initial raw incomplete checkpoint precedes optional reads and analysis'}
 }
 $mock={param($definition,$timeout,$directory)
     if($definition.FunctionName -eq 'Invoke-ConnectivityProbe'){throw 'Unexpected active probe'}
     [pscustomobject]@{Name=$definition.Name;Status='Success';Data=@();StartedAt='2026-01-01T10:00:00+00:00';CompletedAt='2026-01-01T10:00:01+00:00'}
 }
 $run=Invoke-SnapshotRun -RepositoryRoot $root -PreviousSnapshotPath $badPath -ExpectationsPath $badPath -CheckExecutor $mock -CheckpointObserver $observer -TestOutputRoot $workspace
-Assert-Run ($run.Evidence.CollectionStatus -eq 'Complete' -and $run.Evidence.SchemaVersion -eq 9) 'Malformed optional files do not discard completed snapshot'
+Assert-Run ($run.Evidence.CollectionStatus -eq 'Complete' -and $run.Evidence.SchemaVersion -eq 10) 'Malformed optional files do not discard completed snapshot'
 Assert-Run ($run.Evidence.SnapshotComparison.Status -eq 'Failed' -and $run.Evidence.ExpectationAssessment.Status -eq 'Failed') 'Both optional failures explicit'
 Assert-Run (@($run.Evidence.Checks | Where-Object Name -eq 'Windows').Count -eq 1) 'Normal checks continued'
 Assert-Run (($run.Evidence.Checks | Where-Object Name -eq 'Connectivity').Status -eq 'Skipped') 'Active probes remain disabled'

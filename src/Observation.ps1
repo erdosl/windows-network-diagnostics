@@ -5,7 +5,7 @@ function Get-ObservationDhcpState {
     $inventory=@($Checks | Where-Object Name -eq 'Adapters')
     $records=@();$reasons=@()
     if($sources.Count -ne 1 -or $sources[0].Status -ne 'Success' -or $sources[0].Data -isnot [array]){
-        return [pscustomobject]@{ContractVersion=3;Status='Not assessed';Records=@();Reasons=@('DHCP source missing, failed or ambiguous.')}
+        return [pscustomobject]@{ContractVersion=4;Status='Not assessed';Records=@();Reasons=@('DHCP source missing, failed or ambiguous.')}
     }
     $inventoryOk=$inventory.Count -eq 1 -and $inventory[0].Status -eq 'Success' -and $inventory[0].Data -is [array]
     $ci=[array]::IndexOf(@($Checks),$sources[0])
@@ -37,14 +37,14 @@ function Get-ObservationDhcpState {
             $record.Reasons+= [pscustomobject]@{Code='DuplicateConfigurationIdentity';Path=$record.Path;Explanation='Multiple configuration records share this identity.'}
         }
     }
-    [pscustomobject]@{ContractVersion=3;Status=$(if(-not $records.Count){'Not assessed'}elseif(@($records | Where-Object {$_.Reasons.Count}).Count){'Partial'}else{'Success'});Records=$records;Reasons=$reasons}
+    [pscustomobject]@{ContractVersion=4;Status=$(if(-not $records.Count){'Not assessed'}elseif(@($records | Where-Object {$_.Reasons.Count}).Count){'Partial'}else{'Success'});Records=$records;Reasons=$reasons}
 }
 
 function Compare-ObservationDhcpState {
     param($Before,$After,[string]$BeforeArtifact='Before',[string]$AfterArtifact='After')
     $results=@();$details=@();$reasons=@()
-    if($Before.ContractVersion -ne 3 -or $After.ContractVersion -ne 3){
-        $reasons+= [pscustomobject]@{Code='ContractUnavailable';Artifact=$BeforeArtifact+' / '+$AfterArtifact;Explanation='Comparison state contract 3 required; rederive from raw checks.'}
+    if($Before.ContractVersion -ne 4 -or $After.ContractVersion -ne 4){
+        $reasons+= [pscustomobject]@{Code='ContractUnavailable';Artifact=$BeforeArtifact+' / '+$AfterArtifact;Explanation='Comparison state contract 4 required; rederive from raw checks.'}
     } else {
         foreach($side in @('Before','After')){
             $state=Get-Variable $side -ValueOnly
@@ -63,18 +63,30 @@ function Compare-ObservationDhcpState {
                 foreach($r in $group.$side){foreach($issue in $r.Reasons){$issues+=[pscustomobject]@{Code=$issue.Code;Artifact=$artifact;Path=$issue.Path;Explanation=$issue.Explanation}}}
                 if($group.$side.Count -ne 1){$issues+=[pscustomobject]@{Code='MissingOrAmbiguousCounterpart';Artifact=$artifact;Path=$null;Explanation='No unique configuration counterpart; absence does not establish removal.'}}
             }
-            if(-not $issues.Count){
+            if(-not @($issues | Where-Object Code -ne 'MissingProperty').Count){
                 $old=$group.Old[0];$now=$group.Now[0];$outcome='Unchanged'
-                foreach($field in $now.Values.PSObject.Properties.Name){
+                foreach($field in @(@($old.Values.PSObject.Properties.Name)+@($now.Values.PSObject.Properties.Name) | Sort-Object -Unique)){
+                    if(-not $old.Values.PSObject.Properties[$field] -or -not $now.Values.PSObject.Properties[$field]){continue}
                     $left=$old.Values.$field;$right=$now.Values.$field
-                    if((ConvertTo-Json -InputObject $left -Depth 8 -Compress) -ceq (ConvertTo-Json -InputObject $right -Depth 8 -Compress)){continue}
                     $lease=$field -in @('DHCPLeaseObtained','DHCPLeaseExpires')
-                    if(-not $lease){$outcome='Changed'}elseif($outcome -eq 'Unchanged'){$outcome='LeaseRefreshed'}
+                    $leaseResult=$null
+                    if($lease){
+                        $leaseResult=Compare-LeaseTimestamp $left $right
+                        if($leaseResult.Outcome -eq 'Unchanged'){continue}
+                        if($leaseResult.Outcome -eq 'Not assessed'){$issues+=[pscustomobject]@{Code=$leaseResult.Classification;Artifact=$AfterArtifact;Path=$now.Path;Explanation="Lease field $field cannot be assessed."}}
+                        elseif($leaseResult.Outcome -eq 'Changed'){$outcome='Changed'}
+                        elseif($outcome -eq 'Unchanged'){$outcome='LeaseRefreshed'}
+                    }else{
+                        if((ConvertTo-Json -InputObject $left -Depth 8 -Compress) -ceq (ConvertTo-Json -InputObject $right -Depth 8 -Compress)){continue}
+                        $outcome='Changed'
+                    }
                     $changes+=[pscustomobject]@{Identity=$group.Identity;Field=$field;Before=$left;After=$right;LeaseField=$lease
+                        LeaseTimestamp=$leaseResult
                         BeforeValueState=$(if($null -eq $left){'ObservedNull'}elseif($left -is [array] -and $left.Count -eq 0){'ObservedEmpty'}else{'Value'})
                         AfterValueState=$(if($null -eq $right){'ObservedNull'}elseif($right -is [array] -and $right.Count -eq 0){'ObservedEmpty'}else{'Value'})
                         BeforePath=$old.Path;AfterPath=$now.Path;BeforeArtifact=$BeforeArtifact;AfterArtifact=$AfterArtifact}
                 }
+                if($issues.Count -and $outcome -eq 'Unchanged'){$outcome='Not assessed'}
             }
             $results+=[pscustomobject]@{Identity=$group.Identity;Outcome=$outcome;ChangedFields=$changes;Reasons=$issues
                 BeforeContext=@($group.Old.Context);AfterContext=@($group.Now.Context)
@@ -142,7 +154,7 @@ function ConvertTo-ObservationChangesHtml {
     foreach($change in $Changes){
         $html+='<tr><td>'+[Net.WebUtility]::HtmlEncode($change.Source)+'</td><td>'+[Net.WebUtility]::HtmlEncode($change.Outcome)+'</td><td>'+[Net.WebUtility]::HtmlEncode($change.Coverage)+'</td></tr>'
         foreach($adapter in $change.Adapters){
-            $description=(@($adapter.ChangedFields.Field)+@($adapter.Reasons | ForEach-Object {$_.Artifact+': '+$_.Explanation})) -join '; '
+            $description=(@($adapter.ChangedFields | ForEach-Object {$_.Field+$(if($_.LeaseTimestamp){' ('+$_.LeaseTimestamp.Classification+')'}else{''})})+@($adapter.Reasons | ForEach-Object {$_.Artifact+': '+$_.Explanation})) -join '; '
             $html+='<tr><td>'+[Net.WebUtility]::HtmlEncode($adapter.Identity)+'</td><td>'+[Net.WebUtility]::HtmlEncode($adapter.Outcome)+'</td><td>'+[Net.WebUtility]::HtmlEncode($description)+'</td></tr>'
         }
     }
@@ -182,20 +194,24 @@ function Get-CounterDeltas {
 function Invoke-ObservationRun {
     param([string]$RepositoryRoot,[ValidateRange(10,600)][int]$DurationSeconds=60,
         [ValidateRange(5,120)][int]$IntervalSeconds=10,[ValidateRange(1,60)][int]$CheckTimeoutSeconds=10,
-        [string]$IncidentContextPath,[scriptblock]$CheckExecutor,[scriptblock]$CancelRequested,
+        [string]$IncidentContextPath,[string]$OutputRoot,[scriptblock]$CheckExecutor,[scriptblock]$CancelRequested,
         [string]$TestOutputRoot,[scriptblock]$ElapsedClock,[scriptblock]$WaitAction,[scriptblock]$WallClock)
     $wall={if($WallClock){& $WallClock}else{[DateTimeOffset]::Now}}
     $identity=New-SnapshotIdentity
-    $outputRoot=Join-Path $RepositoryRoot 'output';if($TestOutputRoot){$outputRoot=$TestOutputRoot}
-    $directory=Join-Path $outputRoot ('observation-'+($identity.ComputerName -replace '[^A-Za-z0-9_.-]','_')+'-'+$identity.RunId)
-    $null=New-Item -ItemType Directory -Path $directory -ErrorAction Stop
-    $manifest=[pscustomobject]@{SchemaVersion=9;ObservationComparisonVersion=3;Mode='Observation';Identity=$identity;CollectionStatus='Incomplete';CompletedAt=$null
+    if($TestOutputRoot){$OutputRoot=$TestOutputRoot}
+    $directory=New-DiagnosticRunDirectory $RepositoryRoot $OutputRoot 'Observation' $identity
+    $manifest=[pscustomobject]@{SchemaVersion=10;ObservationComparisonVersion=4;Mode='Observation';Identity=$identity;CollectionStatus='Incomplete';CompletedAt=$null
         DurationSeconds=$DurationSeconds;IntervalSeconds=$IntervalSeconds;Samples=@();IncidentContext=$null;Error=$null
         Timing=[pscustomobject]@{ContractVersion=1;Basis='Parent run Stopwatch';CollectionStartedAt=(& $wall).ToString('o');CollectionEndedAt=$null;CollectionElapsedSeconds=$null;FinalizationElapsedSeconds=$null;MeasuredElapsedSeconds=$null;WallClockCollectionSeconds=$null;WallMinusMonotonicSeconds=$null;TerminationReason=$null;FinalizationMeasuredThrough='Before final metadata writes; those writes are excluded'}
         Limitation='Sequential samples, no overlap or queue. Transitions between samples can be missed. A failed sample is not unchanged state. No current-path fault is inferred.'}
-    $save={Set-AtomicText (Join-Path $directory 'evidence.json') (ConvertTo-Json -InputObject $manifest -Depth 16)}
+    $manifest | Add-Member NoteProperty Metadata (Get-RunMetadata $identity 'Observation')
+    $manifest | Add-Member NoteProperty Revision 0
+    $save={if($null -eq $manifest.Timing.CollectionElapsedSeconds){$manifest.Revision++};$manifest.Publication.EvidenceRevision=$manifest.Revision;if($manifest.Analysis.Status -eq 'Pending'){$manifest.Analysis.EvidenceRevision=$manifest.Revision};Write-CanonicalEvidence $manifest (Join-Path $directory 'evidence.json')}
     $origin=[Diagnostics.Stopwatch]::GetTimestamp();$elapsed={if($ElapsedClock){& $ElapsedClock}else{([Diagnostics.Stopwatch]::GetTimestamp()-$origin)/[double][Diagnostics.Stopwatch]::Frequency}};$previous=$null;$eventEnds=@{};$seen=@{};$sequence=0
     $timingContext=[pscustomobject]@{RunId=$identity.RunId;OriginTicks=$origin;Frequency=[Diagnostics.Stopwatch]::Frequency}
+    $collectionFailure=$null
+    $manifest | Add-Member NoteProperty Publication ([pscustomobject]@{ContractVersion=1;Canonical='Pending';Html='Pending';EvidenceRevision=$null;Error=$null})
+    $manifest | Add-Member NoteProperty Analysis ([pscustomobject]@{ContractVersion=1;Status='Pending';EvidenceRevision=0;Errors=@()})
     try{
         & $save
         if($IncidentContextPath){
@@ -206,18 +222,21 @@ function Invoke-ObservationRun {
         while([Math]::Floor($DurationSeconds-(& $elapsed)) -ge 1){
             if($CancelRequested -and (& $CancelRequested)){ $manifest.CollectionStatus='Interrupted';break }
             $sampleStart=(& $wall);$sampleClock=(& $elapsed)
-            $sample=[pscustomobject]@{SchemaVersion=9;ObservationComparisonVersion=3;RunId=$identity.RunId;Sequence=$sequence;StartedAt=$sampleStart.ToString('o');CompletedAt=$null;CollectionStatus='Incomplete';Checks=@();Changes=@();CounterDeltas=@();ActualIntervalSeconds=$null}
+            $sample=[pscustomobject]@{SchemaVersion=10;ObservationComparisonVersion=4;RunId=$identity.RunId;Sequence=$sequence;StartedAt=$sampleStart.ToString('o');CompletedAt=$null;CollectionStatus='Incomplete';Checks=@();Changes=@();CounterDeltas=@();ActualIntervalSeconds=$null}
+            $sample | Add-Member NoteProperty Revision 0
+            $sample | Add-Member NoteProperty Analysis ([pscustomobject]@{ContractVersion=1;Status='Pending';EvidenceRevision=0;Sections=@();Errors=@()})
             $sample | Add-Member NoteProperty Timing ([pscustomobject]@{ContractVersion=1;Basis='Parent run Stopwatch';StartedElapsedSeconds=$sampleClock;CompletedElapsedSeconds=$null;IntervalBasis='Same-run monotonic sample starts'})
             $sample | Add-Member NoteProperty StatisticsCoverage ([pscustomobject]@{ContractVersion=1;BatchExecutionStatus='NotCollected';ExpectedAdapters=$null;UsableAdapters=0;Status='Not assessed';EvidencePath=$null;Limitation='Adapter inventory or statistics batch not collected; no usable counter coverage established.'})
             if($previous){$sample.ActualIntervalSeconds=$sampleClock-$previous.Timing.StartedElapsedSeconds}
             $relative='sample-{0:D4}.json' -f $sequence
             $samplePath=Join-Path $directory $relative
             $execute={param($definition)
+                Write-Progress -Activity 'Collecting observation evidence' -Status ("Sample $sequence; running: "+$definition.Name)
                 $remaining=[int][Math]::Floor($DurationSeconds-(& $elapsed))
                 if($remaining -lt 1){return $false}
                 $timeout=[Math]::Min($CheckTimeoutSeconds,$remaining)
                 if(-not $sample.Checks.Count){
-                    Set-AtomicText $samplePath (ConvertTo-Json $sample -Depth 24)
+                    Write-CanonicalEvidence $sample $samplePath
                     $manifest.Samples+= [pscustomobject]@{Path=$relative;Sequence=$sequence;StartedAt=$sample.StartedAt;Status='Incomplete';ActualIntervalSeconds=$sample.ActualIntervalSeconds;Changes=@();CounterDiscontinuities=0;Sha256=$null}
                     & $save
                     # Persistence can consume the remaining budget. Roll back only this
@@ -234,7 +253,8 @@ function Invoke-ObservationRun {
                 if($CheckExecutor){$check=& $CheckExecutor $definition $timeout $directory}
                 else{$check=Invoke-BoundedCheck $definition (Join-Path $RepositoryRoot 'src') $directory $timeout}
                 $sample.Checks+= $check
-                Set-AtomicText $samplePath (ConvertTo-Json $sample -Depth 24)
+                $sample.Revision=$sample.Checks.Count;$sample.Analysis.EvidenceRevision=$sample.Revision
+                Write-CanonicalEvidence $sample $samplePath
                 $true
             }
             $complete=$true
@@ -263,7 +283,7 @@ function Invoke-ObservationRun {
                         }).Count -gt 0
                     }).Count
                     $sample.StatisticsCoverage=[pscustomobject]@{ContractVersion=1;BatchExecutionStatus=$batch.Status;ExpectedAdapters=$adapters.Count;UsableAdapters=$usable;Status=$(if($usable -eq $adapters.Count){'Complete'}elseif($usable){'Partial'}else{'Unavailable'});EvidencePath=$batchPath;Limitation='Execution success does not establish usable counter coverage; individual fields may still be absent.'}
-                    Set-AtomicText $samplePath (ConvertTo-Json $sample -Depth 24)
+                    Write-CanonicalEvidence $sample $samplePath
                 }
             }
             $services=@($sample.Checks | Where-Object Name -eq 'NICServices' | ForEach-Object {$_.Data} | ForEach-Object {$_.ServiceName})
@@ -282,22 +302,25 @@ function Invoke-ObservationRun {
                 }
             }
             if(-not $sample.Checks.Count){break}
-            $state=Get-ObservationState $sample.Checks
-            if($previous){
-                $sample.Changes=@(Compare-ObservationState (Get-ObservationState $previous.Checks) $state ('sample-{0:D4}.json' -f ($sequence-1)) $relative);$sample.CounterDeltas=@(Get-CounterDeltas $previous $sample $sample.ActualIntervalSeconds)
-                foreach($change in $sample.Changes){
-                    $change | Add-Member NoteProperty BeforeEvidence ([pscustomobject]@{Scope='Observation';RunId=$identity.RunId;Artifact=('sample-{0:D4}.json' -f ($sequence-1));SourceCheck=$change.Source})
-                    $change | Add-Member NoteProperty AfterEvidence ([pscustomobject]@{Scope='Observation';RunId=$identity.RunId;Artifact=$relative;SourceCheck=$change.Source})
-                }
-            }
+            $sample.Revision=$sample.Checks.Count
+            Write-CanonicalEvidence $sample $samplePath
+            Invoke-ObservationAnalysis $sample $previous ('sample-{0:D4}.json' -f ($sequence-1)) $relative
+            $manifest.Analysis.Errors+=@($sample.Analysis.Errors)
             if($complete){$sample.CollectionStatus='Complete'}
             $sample.CompletedAt=(& $wall).ToString('o');$sample.Timing.CompletedElapsedSeconds=(& $elapsed)
-            Set-AtomicText $samplePath (ConvertTo-Json $sample -Depth 24)
+            Write-CanonicalEvidence $sample $samplePath
             $manifest.Samples[-1].Status=$sample.CollectionStatus
             $manifest.Samples[-1].Changes=@($sample.Changes | Select-Object Source,Outcome,Coverage,Adapters,ChangedFields,Reasons,BeforeEvidence,AfterEvidence)
             $manifest.Samples[-1].CounterDiscontinuities=@($sample.CounterDeltas | Where-Object Status -eq 'Discontinuity').Count
             $manifest.Samples[-1].Sha256=(Get-FileHash -LiteralPath $samplePath -Algorithm SHA256).Hash
-            $manifest.Samples[-1] | Add-Member NoteProperty StatisticsCoverage $sample.StatisticsCoverage
+            $coverage=$sample.StatisticsCoverage | Select-Object *
+            $coverage | Add-Member NoteProperty Artifact $relative
+            $manifest.Samples[-1] | Add-Member NoteProperty StatisticsCoverage $coverage
+            $manifest.Samples[-1] | Add-Member NoteProperty Analysis $sample.Analysis
+            $manifest.Samples[-1] | Add-Member NoteProperty InterfaceSummary @($sample.DhcpSummary.Interfaces | Where-Object {$null -ne $_} | ForEach-Object {
+                [pscustomobject]@{Alias=$_.Alias;Identity=$_.StableIdentity;Values=$_.Values;Availability=$_.Availability;Evidence=[pscustomobject]@{Artifact=$relative;Path=('/DhcpSummary/Interfaces/'+[array]::IndexOf(@($sample.DhcpSummary.Interfaces),$_))}}
+            })
+            $manifest.Analysis.EvidenceRevision=$sequence+1
             & $save
             $previous=$sample;$sequence++
             $remainingWait=[Math]::Min($IntervalSeconds-((& $elapsed)-$sampleClock),$DurationSeconds-(& $elapsed))
@@ -309,7 +332,7 @@ function Invoke-ObservationRun {
             if($manifest.CollectionStatus -eq 'Interrupted'){break}
         }
         if($manifest.CollectionStatus -ne 'Interrupted'){$manifest.CollectionStatus='Complete'}
-    }catch{$manifest.Error=$_.Exception.Message;throw}
+    }catch{$collectionFailure=$_;$manifest.Error=$_.Exception.Message}
     finally{
         $collectionEnd=(& $elapsed);$manifest.Timing.CollectionElapsedSeconds=$collectionEnd
         $manifest.Timing.CollectionEndedAt=(& $wall).ToString('o')
@@ -317,21 +340,57 @@ function Invoke-ObservationRun {
         $manifest.Timing.WallMinusMonotonicSeconds=$manifest.Timing.WallClockCollectionSeconds-$collectionEnd
         $manifest.Timing.TerminationReason=$(if($manifest.Error){'CollectionError'}elseif($manifest.CollectionStatus -eq 'Interrupted'){'Cancelled'}else{'DeadlineBudgetExhausted'})
         $manifest.CompletedAt=(& $wall).ToString('o')
+        $manifest.Analysis.EvidenceRevision=$manifest.Revision
+        $manifest.Publication.EvidenceRevision=$manifest.Revision
         try{& $save
-            $html='<html><meta charset="utf-8"><h1>Bounded observation</h1><p>'+[Net.WebUtility]::HtmlEncode($manifest.CollectionStatus+' - '+$manifest.Limitation)+'</p>'
+            $manifest.Analysis.Status=$(if($manifest.Analysis.Errors.Count){'Partial'}else{'Complete'})
+            $manifest.Publication.Canonical='Published'
+            & $save
+            $manifest.Publication.Html='Rendering'
+            $html='<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Bounded observation</title><style>body{font:16px system-ui;max-width:1100px;margin:2rem}pre{white-space:pre-wrap;overflow-wrap:anywhere}td{padding:.4rem;vertical-align:top}details{margin:.7rem 0}</style></head><body><h1>Bounded observation</h1><p>'+[Net.WebUtility]::HtmlEncode($manifest.CollectionStatus+' - '+$manifest.Limitation)+'</p>'
+            $html+='<p>Collection: '+$manifest.CollectionStatus+'; analysis: '+$manifest.Analysis.Status+'; canonical JSON: '+$manifest.Publication.Canonical+'; HTML publication in progress. Evidence revision '+$manifest.Revision+'. Command exit confirms final publication.</p><p>Competing DHCP servers: not assessed.</p>'
             $html+='<p>Complete samples: '+@($manifest.Samples | Where-Object Status -eq 'Complete').Count+'; partial samples: '+@($manifest.Samples | Where-Object Status -ne 'Complete').Count+'</p>'
-            foreach($ref in $manifest.Samples){$html+='<p><a href="'+$ref.Path+'">'+[Net.WebUtility]::HtmlEncode($ref.StartedAt)+'</a> '+[Net.WebUtility]::HtmlEncode($ref.Status+'; actual interval seconds: '+$ref.ActualIntervalSeconds+'; counter discontinuities: '+$ref.CounterDiscontinuities)+'</p>'+(ConvertTo-ObservationChangesHtml $ref.Changes)}
+            foreach($ref in $manifest.Samples){
+                $html+='<p><a href="'+$ref.Path+'">'+[Net.WebUtility]::HtmlEncode($ref.StartedAt)+'</a> '+[Net.WebUtility]::HtmlEncode($ref.Status+'; actual interval seconds: '+$ref.ActualIntervalSeconds+'; counter discontinuities: '+$ref.CounterDiscontinuities)+'</p>'
+                $html+=(ConvertTo-ObservationChangesHtml @($ref.Changes | Where-Object Outcome -ne 'Unchanged'))
+                $html+='<details><summary>Unchanged evidence</summary>'+(ConvertTo-ObservationChangesHtml @($ref.Changes | Where-Object Outcome -eq 'Unchanged'))+'</details>'
+                if($ref.Analysis.Status -ne 'Complete'){$html+='<p>Analysis coverage: '+[Net.WebUtility]::HtmlEncode($ref.Analysis.Status)+'</p>'}
+                foreach($interface in $ref.InterfaceSummary){$html+='<details><summary>Interface '+[Net.WebUtility]::HtmlEncode($interface.Alias+'; '+$interface.Values.LinkState)+'</summary><p>Configured gateways are not observed socket paths. Full scoped evidence and structured event context are in the linked sample.</p><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $interface -Depth 8))+'</pre></details>'}
+            }
             $htmlBase=$html
-            $html+='<details><summary>Session metadata and user report</summary><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest -Depth 16))+'</pre></details></html>'
+            $html+='<details><summary>Session metadata and user report</summary><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest -Depth 16))+'</pre></details></body></html>'
             Set-AtomicText (Join-Path $directory 'summary.html') $html
+            $manifest.Publication.Html='Published'
             $manifest.Timing.MeasuredElapsedSeconds=(& $elapsed)
             $manifest.Timing.FinalizationElapsedSeconds=$manifest.Timing.MeasuredElapsedSeconds-$collectionEnd
             $manifest.CompletedAt=(& $wall).ToString('o')
             & $save
             $timingHtml='<h2>Timing and statistics coverage</h2><p>Requested collection seconds: '+$DurationSeconds+'; measured collection seconds: '+$collectionEnd+'; finalization seconds: '+$manifest.Timing.FinalizationElapsedSeconds+'; termination: '+$manifest.Timing.TerminationReason+'. Actual intervals use the parent run Stopwatch. Wall-clock differences alone do not prove a clock adjustment or deadline violation.</p><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest.Timing -Depth 5))+'</pre>'
             foreach($ref in $manifest.Samples){$timingHtml+='<p>Sample '+$ref.Sequence+' statistics: '+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $ref.StatisticsCoverage -Compress))+'</p>'}
-            Set-AtomicText (Join-Path $directory 'summary.html') ($htmlBase+$timingHtml+'<details><summary>Session metadata and user report</summary><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest -Depth 16))+'</pre></details></html>')
-        }catch{Write-Warning 'Final observation checkpoint failed; earlier files remain recoverable.'}
+            $manifest.Publication.Html='Rendering'
+            Set-AtomicText (Join-Path $directory 'summary.html') ($htmlBase+$timingHtml+'<details><summary>Session metadata and user report</summary><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json $manifest -Depth 16))+'</pre></details></body></html>')
+            $manifest.Publication.Html='Published'
+        }catch{
+            $finalFailure=$_
+            $stage=$(if($finalFailure.Exception.Data['ArtifactStage']){$finalFailure.Exception.Data['ArtifactStage']}elseif($manifest.Publication.Html -eq 'Rendering'){'HTML publication'}else{'Canonical/final metadata publication'})
+            $manifest.Publication.Error=Get-ArtifactError $finalFailure $stage $directory
+            $failureMetadataPersisted=$false
+            if($stage -eq 'HTML publication'){
+                $manifest.Publication.Html='Failed'
+                try { & $save;$failureMetadataPersisted=$true } catch { $finalFailure.Exception.Data['FailureMetadataWriteError']=$_ }
+            }else{$manifest.Publication.Canonical='Failed'}
+            $exception=[IO.IOException]::new("Observation $stage failed in '$directory': $($finalFailure.Exception.Message) Earlier checkpoints and sample files may be recoverable.",$finalFailure.Exception)
+            $exception.Data['ArtifactDirectory']=$directory
+            $exception.Data['Stage']=$stage
+            $exception.Data['CollectionStatus']=$manifest.CollectionStatus
+            $exception.Data['AnalysisStatus']=$manifest.Analysis.Status
+            $exception.Data['FailureMetadataPersisted']=$failureMetadataPersisted
+            if($collectionFailure){$exception.Data['CollectionError']=$collectionFailure}
+            $exception.Data['FinalizationError']=$finalFailure
+            throw $exception
+        }
     }
+    if($collectionFailure){throw $collectionFailure}
+    Write-Progress -Activity 'Collecting observation evidence' -Completed
     [pscustomobject]@{Directory=$directory;Evidence=$manifest}
 }

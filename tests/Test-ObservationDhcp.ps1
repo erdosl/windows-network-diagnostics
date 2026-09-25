@@ -17,7 +17,7 @@ Assert ((Compare-DhcpObservation $a $b).Outcome -eq 'Changed') 'Domain-only chan
 $html=ConvertTo-ObservationChangesHtml @((Compare-DhcpObservation $a $b))
 Assert ($html.Contains('DNSDomain') -and -not $html.Contains('<changed>') -and $html.Contains('BeforePath')) 'Changed fields and provenance rendered with HTML encoding'
 $b=New-DhcpReviewFixture;$b.Checks[1].Data[0].DHCPLeaseObtained='2026-01-01T10:00:00Z'
-Assert ((Compare-DhcpObservation $a $b).Outcome -eq 'LeaseRefreshed') 'Lease-only refresh'
+Assert ((Compare-DhcpObservation $a $b).Outcome -eq 'Changed') 'Lease became available, not a refresh from a known prior instant'
 $b.Checks[1].Data[0].DHCPServer='192.0.2.9'
 Assert ((Compare-DhcpObservation $a $b).Outcome -eq 'Changed') 'Configuration overrides lease refresh'
 $b=New-DhcpReviewFixture;[array]::Reverse($b.Checks[1].Data);[array]::Reverse($b.Checks[0].Data)

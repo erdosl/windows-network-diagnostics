@@ -113,7 +113,7 @@ $null=New-Item -ItemType Directory $work
 $paths=Write-DiagnosticReport $now (Join-Path $work 'report')
 $saved=Get-Content -LiteralPath $paths.JsonPath -Raw | ConvertFrom-Json
 Check ($saved.DhcpSummary.Interfaces[0].Values.IPv4.Count -eq 0 -and $saved.DhcpSummary.Interfaces[0].Values.Gateways.Count -eq 0 -and $saved.DhcpSummary.Interfaces[0].Values.DnsServers.Count -eq 0) 'Observed empty collections round-trip as []'
-Check ($saved.ContextEvidence.ContractVersion -eq 3) 'Availability contract change explicitly versioned'
+Check ($saved.ContextEvidence.ContractVersion -eq 4) 'Availability contract change explicitly versioned'
 $now.SchemaVersion=7
 $now | ConvertTo-Json -Depth 24 | Set-Content -LiteralPath (Join-Path $work 'schema7.json') -Encoding UTF8
 $loaded=Read-ContextInput (Join-Path $work 'schema7.json') Baseline SYNTHETIC

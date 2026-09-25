@@ -1,6 +1,26 @@
 #requires -Version 5.1
+
+<#
+.SYNOPSIS
+Collect a passive Windows network snapshot with JSON evidence and offline HTML.
+.DESCRIPTION
+Defaults are passive. Complete means checks were attempted, not network health.
+Canonical JSON or requested HTML publication failure terminates with exit 1.
+Analysis failures retain raw checks and are recorded per section.
+.PARAMETER OutputRoot
+Output parent, relative to the caller's working directory. Defaults to repository output.
+Each run creates a unique directory. Literal brackets and spaces are supported.
+.EXAMPLE
+powershell.exe -NoProfile -File .\Collect-NetworkDiagnostics.ps1 -OutputRoot 'C:\temp\Network reports'
+.EXAMPLE
+.\Collect-NetworkDiagnostics.ps1 -PreviousSnapshotPath '.\baseline\evidence.json' -ExpectationsPath '.\expectations.json'
+.EXAMPLE
+.\Collect-NetworkDiagnostics.ps1 -IncludeConnectivityTests -ProbeTimeoutSeconds 5
+Probes are explicit. Gateway ICMP additionally requires IncludeGatewayPing.
+#>
 [CmdletBinding()]
 param(
+    [string]$OutputRoot,
     [string]$PreviousSnapshotPath,
     [string]$ExpectationsPath,
     [string]$IncidentContextPath,

@@ -1,3 +1,25 @@
+function Compare-LeaseTimestamp {
+    param($Before,$After,[string]$BeforeState='Value',[string]$AfterState='Value')
+    $left=ConvertTo-ContextTime $Before;$right=ConvertTo-ContextTime $After
+    $classification='Unassessed';$outcome='Not assessed'
+    if($BeforeState -eq 'Value' -and $null -eq $Before){$BeforeState='ObservedNull'}
+    if($AfterState -eq 'Value' -and $null -eq $After){$AfterState='ObservedNull'}
+    if($BeforeState -eq 'Value' -and (($Before -is [string] -and $Before -eq '') -or ($Before -is [array] -and $Before.Count -eq 0))){$BeforeState='ObservedEmpty'}
+    if($AfterState -eq 'Value' -and (($After -is [string] -and $After -eq '') -or ($After -is [array] -and $After.Count -eq 0))){$AfterState='ObservedEmpty'}
+    if($BeforeState -notin @('MissingProperty','Unavailable') -and $AfterState -notin @('MissingProperty','Unavailable')){
+        if($null -eq $Before -and $null -eq $After){$classification='ObservedNullUnchanged';$outcome='Unchanged'}
+        elseif($Before -is [string] -and $After -is [string] -and $Before -eq '' -and $After -eq ''){$classification='ObservedEmptyUnchanged';$outcome='Unchanged'}
+        elseif($left -and $right){
+            if($right -eq $left){$classification='SameInstant';$outcome='Unchanged'}
+            elseif($right -gt $left){$classification='ForwardProgression';$outcome='LeaseRefreshed'}
+            else{$classification='BackwardMovement';$outcome='Changed'}
+        } elseif($left -and ($null -eq $After -or [string]$After -eq '')){$classification='Cleared';$outcome='Changed'}
+        elseif($right -and ($null -eq $Before -or [string]$Before -eq '')){$classification='BecameAvailable';$outcome='Changed'}
+        elseif(($null -ne $Before -and [string]$Before -ne '' -and -not $left) -or ($null -ne $After -and [string]$After -ne '' -and -not $right)){$classification='InvalidTimestamp'}
+    }
+    [pscustomobject]@{ContractVersion=1;Outcome=$outcome;Classification=$classification;Before=$Before;After=$After;BeforeState=$BeforeState;AfterState=$AfterState;Limitation='Timestamp progression is an observation, not a captured DHCP exchange.'}
+}
+
 function ConvertTo-ContextTime {
     param($Value)
     if ($null -eq $Value -or [string]$Value -eq '') { return $null }
@@ -191,7 +213,10 @@ function Get-DhcpInterfaceContext {
         foreach($dateField in @(@('LeaseObtained','DHCPLeaseObtained'),@('LeaseExpires','DHCPLeaseExpires'))) {
             if($sources.DHCPAndGateways.Status -eq 'Success' -and $d.Count -eq 1) {
                 if($dhcp.DHCPEnabled -eq $false){$availability[$dateField[0]]='Not applicable'}
-                elseif($null -eq $values[$dateField[0]] -and $null -ne $dhcp.($dateField[1]) -and [string]$dhcp.($dateField[1]) -ne ''){$availability[$dateField[0]]='Invalid'}
+                elseif(-not $dhcp.PSObject.Properties[$dateField[1]]){$availability[$dateField[0]]='MissingProperty'}
+                elseif($null -eq $dhcp.($dateField[1])){$availability[$dateField[0]]='ObservedNull'}
+                elseif([string]$dhcp.($dateField[1]) -eq ''){$availability[$dateField[0]]='ObservedEmpty'}
+                elseif($null -eq $values[$dateField[0]]){$availability[$dateField[0]]='Invalid'}
             }
         }
         if($sources.DHCPAndGateways.Status -eq 'Success' -and $d.Count -eq 1){
@@ -209,6 +234,7 @@ function Get-DhcpInterfaceContext {
             Disconnected=$disconnected;ConfigurationNote=$(if($disconnected){'Retained configuration on a disconnected adapter.'}else{'Configured values; gateway/DNS origin is not established.'})
             Values=[pscustomobject]$values;Availability=[pscustomobject]$availability;Sources=[pscustomobject]$sources;DnsValueSource=$dnsSource;GatewayValueSource=$gatewaySource
             SelectedDhcpServerState=$serverState;SelectedDhcpServerRaw=$dhcp.DHCPServer
+            LeaseRaw=[pscustomobject]@{LeaseObtained=$dhcp.DHCPLeaseObtained;LeaseExpires=$dhcp.DHCPLeaseExpires}
             LeaseReferenceTime=$referenceTime;LeaseRemainingSeconds=$remaining
             LeaseTimeNote='Missing, invalid or offset-free dates are unknown; remaining time is relative to DHCP source completion, not report viewing time.'
             CompetingDhcpServers='Not assessed'}
@@ -234,7 +260,7 @@ function Read-ContextInput {
     if ($file.PSIsContainer) { throw 'Optional input must be a JSON file.' }
     $inputObject = Get-Content -LiteralPath $file.FullName -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     if ($Kind -eq 'Baseline') {
-        if ($inputObject.SchemaVersion -notin @(6,7,8,9) -or $inputObject.Mode -ne 'Snapshot' -or -not $inputObject.RunId -or $null -eq $inputObject.Checks) { throw 'Unsupported or malformed baseline; expected snapshot schema 6, 7, 8 or 9.' }
+        if ($inputObject.SchemaVersion -notin @(6,7,8,9,10) -or $inputObject.Mode -ne 'Snapshot' -or -not $inputObject.RunId -or $null -eq $inputObject.Checks) { throw 'Unsupported or malformed baseline; expected snapshot schema 6, 7, 8, 9 or 10.' }
         if (-not $ComputerName -or $inputObject.ComputerName -ne $ComputerName) { throw 'Baseline computer identity is incompatible.' }
         if (-not (ConvertTo-ContextTime $inputObject.StartedAt)) { throw 'Baseline start timestamp is invalid or lacks an offset.' }
         # Retain only the six check families consumed by these features. Never
@@ -330,9 +356,16 @@ function Compare-DhcpContext {
             }
             $outcome = 'Unchanged'
             if (-not $available) { $outcome = 'Not assessed' } elseif (-not $equal) { $outcome = 'Changed' }
-            if ($available -and $field -in @('LeaseObtained','LeaseExpires') -and (ConvertTo-ContextTime $after) -gt (ConvertTo-ContextTime $before)) { $outcome = 'Lease refreshed' }
+            $lease=$null
+            if($field -in @('LeaseObtained','LeaseExpires')){
+                $bs=$old[0].Availability.$field;$ns=$now.Availability.$field
+                if($bs -notin @('Available','ObservedNull','ObservedEmpty','Invalid','MissingProperty')){$bs='Unavailable'}
+                if($ns -notin @('Available','ObservedNull','ObservedEmpty','Invalid','MissingProperty')){$ns='Unavailable'}
+                $lease=Compare-LeaseTimestamp $old[0].LeaseRaw.$field $now.LeaseRaw.$field $bs $ns
+                $outcome=$lease.Outcome;if($outcome -eq 'LeaseRefreshed'){$outcome='Lease refreshed'}
+            }
             $changes += [pscustomobject]@{Identity=$now.StableIdentity;Field=$field;Outcome=$outcome;Before=$before;After=$after;BeforeAvailability=$old[0].Availability.$field;AfterAvailability=$now.Availability.$field
-                Basis=$now.IdentityBasis}
+                LeaseTimestamp=$lease;Basis=$now.IdentityBasis}
         }
     }
     foreach ($old in $Baseline.Interfaces) {
@@ -537,7 +570,7 @@ function Update-DhcpContext {
         }
     }
     $Evidence | Add-Member NoteProperty DhcpSummary ([pscustomobject]@{CompetingDhcpServers='Not assessed';Limitation='One selected DHCP server and successful client probes do not establish that only one DHCP server exists.';Interfaces=$interfaces}) -Force
-    $Evidence | Add-Member NoteProperty ContextEvidence ([pscustomobject]@{ContractVersion=3;Current=[pscustomobject]@{Identity=($Evidence | Select-Object ComputerName,RunId,StartedAt,CompletedAt,CollectionStatus);ChecksPath='/Checks'};Baseline=$storedBaseline}) -Force
+    $Evidence | Add-Member NoteProperty ContextEvidence ([pscustomobject]@{ContractVersion=4;Current=[pscustomobject]@{Identity=($Evidence | Select-Object ComputerName,RunId,StartedAt,CompletedAt,CollectionStatus);ChecksPath='/Checks'};Baseline=$storedBaseline}) -Force
     $Evidence | Add-Member NoteProperty SnapshotComparison $comparison -Force
     $Evidence | Add-Member NoteProperty ExpectationAssessment $assessment -Force
     $Evidence | Add-Member NoteProperty HistoricalEventContext (@(Get-HistoricalEventContext $Evidence $interfaces $baseline)) -Force
@@ -588,7 +621,9 @@ function ConvertTo-ComparisonRowsHtml {
         $beforeValue=@($row.Before) -join ', ';$afterValue=@($row.After) -join ', '
         if($row.Field -in @('LeaseObtained','LeaseExpires')){$beforeValue=Format-ContextTimestamp $row.Before;$afterValue=Format-ContextTimestamp $row.After}
         $null=$html.Append('<tr>')
-        foreach($value in @($label,$field,$row.Outcome,$beforeValue,$afterValue)){$null=$html.Append('<td>'+(& $encode $value)+'</td>')}
+        $classification=[string]$row.Outcome
+        if($row.LeaseTimestamp){$classification+=' / '+$row.LeaseTimestamp.Classification}
+        foreach($value in @($label,$field,$classification,$beforeValue,$afterValue)){$null=$html.Append('<td>'+(& $encode $value)+'</td>')}
         $null=$html.Append('<td>'+(& $encode $row.StateNote)+'<details><summary>Identity and state details</summary><p>Stable GUID: '+(& $encode $row.Identity)+'</p><p>'+(& $encode $row.Detail)+'</p><p>Baseline link/connection: '+(& $encode ($row.BeforeContext.LinkState+' / '+(@($row.BeforeContext.ConnectionState) -join ', ')))+'</p><p>Current link/connection: '+(& $encode ($row.AfterContext.LinkState+' / '+(@($row.AfterContext.ConnectionState) -join ', ')))+'</p>')
         $null=$html.Append('<p>Availability: '+(& $encode ($row.BeforeAvailability+' -> '+$row.AfterAvailability))+'</p>'+(ConvertTo-ContextLink $row.BeforeReference 'Baseline adapter evidence')+' '+(ConvertTo-ContextLink $row.AfterReference 'Current adapter evidence')+' '+(ConvertTo-ContextLink $row.BeforeInventoryReference 'Baseline inventory coverage')+' '+(ConvertTo-ContextLink $row.AfterInventoryReference 'Current inventory coverage')+'</details></td></tr>')
     }

@@ -13,7 +13,7 @@ $mock={param($definition,$timeout,$directory)
     [pscustomobject]@{Name=$definition.Name;Status=$(if($definition.Name -eq 'IncidentContext'){'Failed'}else{'Success'});Data=$data;Error=$null}
 }
 $run=Invoke-SnapshotRun -RepositoryRoot $root -IncidentContextPath (Join-Path $work 'invalid.json') -CheckExecutor $mock -TestOutputRoot $work
-Assert ($run.Evidence.CollectionStatus -eq 'Complete' -and $run.Evidence.SchemaVersion -eq 9) 'Incident failure isolated and schema versioned'
+Assert ($run.Evidence.CollectionStatus -eq 'Complete' -and $run.Evidence.SchemaVersion -eq 10) 'Incident failure isolated and schema versioned'
 Assert (@($run.Evidence.Checks|Where-Object { $_.Name -eq 'IncidentContext' -and $_.Status -eq 'Failed' }).Count -eq 1) 'Incident failed check retained'
 Assert (@($script:definitions|Where-Object FunctionName -eq 'Invoke-ConnectivityProbe').Count -eq 0) 'No probes by default'
 Assert (@($script:definitions|Where-Object Name -like 'Proxy:*').Count -eq 3) 'User machine and WinHTTP inventory separate'

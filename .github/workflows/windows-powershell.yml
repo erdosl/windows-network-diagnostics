@@ -1,0 +1,16 @@
+name: Windows PowerShell validation
+on: [push, pull_request]
+jobs:
+  non-live:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run non-live suites on the actual Windows Server runner
+        shell: powershell
+        run: powershell.exe -NoProfile -File .\tests\Run-Tests.ps1
+      - name: Preserve synthetic validation results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-server-validation
+          path: output/tests/validation-*

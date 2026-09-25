@@ -2,6 +2,7 @@
 . (Join-Path $PSScriptRoot 'DhcpContext.ps1')
 . (Join-Path $PSScriptRoot 'Findings.ps1')
 . (Join-Path $PSScriptRoot 'AdditionalEvidence.ps1')
+. (Join-Path $PSScriptRoot 'ReportPipeline.ps1')
 
 function Get-AddressClassification {
     param([AllowNull()][AllowEmptyString()][string]$Address)
@@ -28,20 +29,20 @@ function Invoke-DiagnosticCheck {
         $status = 'Failed'
         $provider=$_.Exception.Data['AdapterProviderContext']
         $explanation=$null
+        $exception=$_.Exception
+        $denied=$_.CategoryInfo.Category -eq 'PermissionDenied'
+        while($null -ne $exception){
+            if($exception -is [UnauthorizedAccessException] -or $exception.HResult -eq -2147024891 -or
+                ($exception -is [ComponentModel.Win32Exception] -and $exception.NativeErrorCode -eq 5) -or
+                ($exception.GetType().FullName -eq 'Microsoft.Management.Infrastructure.CimException' -and [int]$exception.NativeErrorCode -eq 2)){$denied=$true}
+            $exception=$exception.InnerException
+        }
         if ($provider) {
-            $exception=$_.Exception
-            $denied=$_.CategoryInfo.Category -eq 'PermissionDenied'
-            while ($null -ne $exception) {
-                if ($exception -is [UnauthorizedAccessException] -or
-                    ($exception -is [ComponentModel.Win32Exception] -and $exception.NativeErrorCode -eq 5) -or $exception.HResult -eq -2147024891) { $denied=$true }
-                $exception=$exception.InnerException
-            }
             if ($denied) { $status='PermissionDenied' }
             elseif ($_.Exception.Data['AdapterProviderMissing']) { $status='Unavailable'; $explanation='No matching adapter-provider object was returned.' }
             elseif ($_.Exception -is [Management.Automation.CommandNotFoundException] -or $_.Exception -is [NotSupportedException]) { $status='Unavailable' }
         }
-        elseif ($_.Exception -is [UnauthorizedAccessException] -or $_.CategoryInfo.Category -eq 'PermissionDenied' -or
-            $_.Exception.Message -match '(?i)access.*denied|permission|0x80070005|requires elevation|returns error 5\b') { $status = 'PermissionDenied' }
+        elseif ($denied) { $status = 'PermissionDenied' }
         elseif ($_.Exception -is [System.Management.Automation.CommandNotFoundException] -or
             $_.FullyQualifiedErrorId -match 'NoMatchingLogsFound|NoMatchingProvidersFound' -or
             $_.Exception -is [System.NotSupportedException]) { $status = 'Unavailable' }
@@ -173,19 +174,14 @@ function Get-DnsResultSummary {
     }
 }
 
-function Write-DiagnosticReport {
+function ConvertTo-DiagnosticHtml {
     param([Parameter(Mandatory)]$Evidence, [Parameter(Mandatory)][string]$OutputDirectory)
-    $null = New-Item -ItemType Directory -Path $OutputDirectory -Force -ErrorAction Stop
-    $Evidence | Add-Member NoteProperty LogicalNetwork (Get-LogicalNetworkModel $Evidence) -Force
-    Update-DhcpContext $Evidence
-    $Evidence | Add-Member NoteProperty ConfigurationOrigins (@(Get-ConfigurationOrigins $Evidence.Checks)) -Force
-    $Evidence | Add-Member NoteProperty VpnInterfaceContext (@(Get-VpnInterfaceContext $Evidence.Checks)) -Force
-    $json = ConvertTo-Json -InputObject $Evidence -Depth 24
     $jsonPath = Join-Path $OutputDirectory 'evidence.json'
     $htmlPath = Join-Path $OutputDirectory 'summary.html'
     $encode = { param($Value) [System.Net.WebUtility]::HtmlEncode([string]$Value) }
     $html = [System.Text.StringBuilder]::new()
     $null = $html.Append('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Network snapshot</title><style>body{font:16px system-ui;margin:2rem;max-width:1000px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f3f4f6;padding:1rem}li{margin:.5rem 0}</style></head><body><h1>Network snapshot</h1>')
+    $null = $html.Append((ConvertTo-RunOverviewHtml $Evidence))
     $null = $html.Append('<p>Collected: ' + (& $encode $Evidence.CollectedAt) + '</p><p>Read-only configuration evidence with opt-in connectivity probes. A snapshot does not establish a root cause or prove connectivity. Failed ICMP is not proof of unreachability; a failed DNS query alone does not establish a DNS root cause.</p>')
     $null = $html.Append('<h2>Collection identity and state</h2><dl>')
     foreach ($field in @('ComputerName','RunId','CollectorVersion','SchemaVersion','IsElevated','PowerShellVersion','StartedAt','CompletedAt','CollectionStatus','PendingCheck','Revision','CollectionError')) {
@@ -241,17 +237,15 @@ function Write-DiagnosticReport {
     $null = $html.Append('<h2>Checks and raw evidence</h2>')
     $rawCheckIndex=0
     foreach ($check in $Evidence.Checks) {
-        if ($check.Name -eq 'Neighbours') { $null = $html.Append('<details><summary>Raw neighbour-cache evidence</summary>') }
+        $null = $html.Append('<details><summary>Raw '+(& $encode $check.Name)+' evidence: '+(& $encode $check.Status)+'</summary>')
         $null = $html.Append('<h3 id="'+(Get-ContextAnchor ('/Checks/'+$rawCheckIndex))+'">' + (& $encode $check.Name) + ': ' + (& $encode $check.Status) + '</h3><pre>')
         $rawCheckIndex++
         $detail = ConvertTo-Json -InputObject $check -Depth 14
         $null = $html.Append((& $encode $detail) + '</pre>')
-        if ($check.Name -eq 'Neighbours') { $null = $html.Append('</details>') }
+        $null = $html.Append('</details>')
     }
     $null = $html.Append('</body></html>')
     # Explicit UTF-8 works on Windows PowerShell 5.1 and does not depend on console encoding.
     # JSON is the canonical checkpoint. Each file is atomically replaced, not the pair.
-    Set-AtomicText -Path $jsonPath -Text $json
-    Set-AtomicText -Path $htmlPath -Text $html.ToString()
-    [pscustomobject]@{ JsonPath = $jsonPath; HtmlPath = $htmlPath }
+    $html.ToString()
 }

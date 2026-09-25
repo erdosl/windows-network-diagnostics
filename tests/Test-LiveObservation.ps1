@@ -27,7 +27,7 @@ $b.Checks[1].Data[0].DHCPServer=$a.Checks[1].Data[0].DHCPServer;$b.Checks[1].Dat
 Assert ((Pair $a $b).Outcome -eq 'Changed') 'Domain despite unmatched'
 Assert ((ConvertTo-ObservationChangesHtml @((Pair $a $b))) -notmatch '<other>') 'HTML escapes changes'
 $b.Checks[1].Data[0].DNSDomain=$a.Checks[1].Data[0].DNSDomain;$b.Checks[1].Data[0].DHCPLeaseExpires='2026-01-01T12:00:00Z'
-Assert ((Pair $a $b).Outcome -eq 'LeaseRefreshed') 'Lease despite unmatched'
+Assert ((Pair $a $b).Outcome -eq 'Changed') 'Lease became available despite unmatched record'
 $b=New-DhcpReviewFixture;$a=New-DhcpReviewFixture;$b.Checks[1].Data+=$b.Checks[1].Data[0]
 $c=Pair $a $b
 Assert (@($c.Adapters | Where-Object Outcome -eq 'Unchanged').Count -eq 11) 'Duplicate affects only implicated identity'

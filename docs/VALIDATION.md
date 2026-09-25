@@ -1,3 +1,5 @@
+> Current 0.6.0 implementation results and limitations are in [VALIDATION-CURRENT.md](VALIDATION-CURRENT.md).
+
 > This is a historical validation record. Statements such as "Windows 11
 > remains untested" and requests to rerun collection describe their historical
 > sections, not current coverage. The [completed 0.5.4 Windows 11 follow-up](#completed-targeted-windows-11-follow-up-054)
