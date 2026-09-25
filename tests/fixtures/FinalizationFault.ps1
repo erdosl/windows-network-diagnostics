@@ -13,7 +13,7 @@ function Set-AtomicText {
     if($Model){$script:files[$Path]=$Text}else{& $script:realWriter $Path $Text}
 }
 if($Model){function Get-FileHash {param($LiteralPath,$Algorithm);[pscustomobject]@{Hash='MODELED'}}}
-function New-SnapshotIdentity {[pscustomobject]@{ComputerName='SYNTHETIC';RunId=[guid]::NewGuid().ToString();CollectorVersion='0.6.0';IsElevated=$false;StartedAt='2026-01-01T00:00:00Z'}}
+function New-SnapshotIdentity {[pscustomobject]@{ComputerName='SYNTHETIC';RunId=[guid]::NewGuid().ToString();CollectorVersion='0.7.0';IsElevated=$false;StartedAt='2026-01-01T00:00:00Z'}}
 $execute={param($definition,$timeout,$directory)
     $script:calls++;$script:time+=0.1
     if($Scenario -eq 'Both' -and $script:calls -eq 3){throw [InvalidOperationException]::new('Injected collection failure')}

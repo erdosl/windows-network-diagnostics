@@ -1,36 +1,50 @@
 #requires -Version 5.1
 $ErrorActionPreference='Stop';$root=Split-Path $PSScriptRoot -Parent
-foreach($file in @('Core','State','Verification')){. (Join-Path $root "src\$file.ps1")}
+foreach($file in @('Core','State','Events','Connectivity','Orchestration','Observation','Verification')){. (Join-Path $root "src\$file.ps1")}
 . (Join-Path $PSScriptRoot 'TestWorkRoot.ps1');$work=New-TestWorkRoot
-$id=New-SnapshotIdentity
-$e=[pscustomobject]@{SchemaVersion=10;Mode='Snapshot';RunId=$id.RunId;Metadata=(Get-RunMetadata $id Snapshot);CollectionStatus='Complete';Revision=1;Checks=@();ContextInputs=@();StartedAt=$id.StartedAt}
-# Fixture construction is ordinary test-file I/O, not a persistence validation.
-function Write-CanonicalEvidence {param($Evidence,$Path);[IO.File]::WriteAllText($Path,(ConvertTo-Json $Evidence -Depth 32))}
-$e | Add-Member NoteProperty Analysis ([pscustomobject]@{ContractVersion=1;Status='Complete';EvidenceRevision=1})
-$e | Add-Member NoteProperty Publication ([pscustomobject]@{ContractVersion=1;Canonical='Published';EvidenceRevision=1})
-$paths=[pscustomobject]@{JsonPath=(Join-Path $work 'evidence.json')}
-Write-CanonicalEvidence $e $paths.JsonPath
-if((Test-DiagnosticArtifact $paths.JsonPath).Status -ne 'Valid'){throw 'Valid snapshot rejected'}
-$beforeHash=(Get-FileHash -LiteralPath $paths.JsonPath).Hash
-$null=& powershell.exe -NoProfile -File (Join-Path $root 'Verify-NetworkDiagnostics.ps1') -Path $paths.JsonPath
-if($LASTEXITCODE -ne 0 -or (Get-FileHash -LiteralPath $paths.JsonPath).Hash -ne $beforeHash){throw 'Bounded verifier exit or read-only contract failed'}
-$e | Add-Member NoteProperty BadReference ([pscustomobject]@{Scope='Current';RunId=$id.RunId;Path='/Checks/99'})
-Write-CanonicalEvidence $e $paths.JsonPath
-if((Test-DiagnosticArtifact $paths.JsonPath).Status -ne 'Invalid'){throw 'Missing reference accepted'}
-$ErrorActionPreference='Continue';$null=& powershell.exe -NoProfile -File (Join-Path $root 'Verify-NetworkDiagnostics.ps1') -Path $paths.JsonPath 2>&1;$code=$LASTEXITCODE;$ErrorActionPreference='Stop'
-if($code -eq 0){throw 'Invalid artifact command returned success'}
-$sample=[pscustomobject]@{SchemaVersion=10;ObservationComparisonVersion=4;RunId=$id.RunId;Sequence=0;CollectionStatus='Complete';Checks=@([pscustomobject]@{Name='ObservationStatistics';Status='Success';Data=@()});StatisticsCoverage=@{ContractVersion=1;EvidencePath='/Checks/0'}}
-$sample | Add-Member NoteProperty Revision 1
-$sample | Add-Member NoteProperty Analysis ([pscustomobject]@{ContractVersion=1;EvidenceRevision=1})
-$samplePath=Join-Path $work 'sample-0000.json';Write-CanonicalEvidence $sample $samplePath
-$manifest=[pscustomobject]@{SchemaVersion=10;ObservationComparisonVersion=4;Mode='Observation';Identity=$id;Metadata=(Get-RunMetadata $id Observation);Revision=1;CollectionStatus='Complete';Analysis=@{ContractVersion=1;EvidenceRevision=1};Publication=@{ContractVersion=1;EvidenceRevision=1};Samples=@([pscustomobject]@{Path='sample-0000.json';Sequence=0;Status='Complete';Sha256=(Get-FileHash -LiteralPath $samplePath).Hash})}
-$manifest.Samples[0] | Add-Member NoteProperty StatisticsCoverage ([pscustomobject]@{ContractVersion=1;Artifact='sample-0000.json';EvidencePath='/Checks/0'})
-Write-CanonicalEvidence $manifest $paths.JsonPath
-if((Test-DiagnosticArtifact $paths.JsonPath).Status -ne 'Valid'){throw 'Valid observation rejected'}
-$manifest.Samples[0].Sha256='bad';Write-CanonicalEvidence $manifest $paths.JsonPath
-if((Test-DiagnosticArtifact $paths.JsonPath).Issues -notcontains 'Sample hash mismatch.'){throw 'Hash mismatch not detected'}
-$manifest.Samples[0].Path='..\outside.json';Write-CanonicalEvidence $manifest $paths.JsonPath
-$rejected=$false;try{Test-DiagnosticArtifact $paths.JsonPath}catch{$rejected=$true};if(-not $rejected){throw 'Unsafe referenced path accepted'}
-$manifest.SchemaVersion=9;Write-CanonicalEvidence $manifest $paths.JsonPath
-if((Test-DiagnosticArtifact $paths.JsonPath).Status -ne 'Unsupported'){throw 'Older contract silently accepted'}
-Write-Host 'PASS: synthetic artifact verification, real bounded command exits/read-only hashes, reference resolution, sample identity, hash and path rejection, explicit older-contract result. Fixture writes do not validate atomic replacement.'
+function Assert($v,$m){if(-not $v){throw $m}}
+# Real producers, synthetic collectors and ordinary fixture writes; not an atomic I/O test.
+function Set-AtomicText {param($Path,$Text);[IO.File]::WriteAllText($Path,$Text)}
+$execute={param($definition,$timeout,$directory);[pscustomobject]@{Name=$definition.Name;Status='Success';Data=@();Error=$null}}
+$run=Invoke-SnapshotRun -RepositoryRoot $root -OutputRoot $work -CheckExecutor $execute
+$path=$run.JsonPath;$original=[IO.File]::ReadAllText($path)
+$result=Test-DiagnosticArtifact $path
+Assert ($result.Status -eq 'Valid') ($result.Issues -join '; ')
+$mutations=@(
+    {param($e);$e.CompletedAt=$null},
+    {param($e);$e.Revision='1'},
+    {param($e);$e.SchemaVersion='11'},
+    {param($e);$e.Analysis.Status='Healthy'},
+    {param($e);$e.Metadata.RunId=[guid]::NewGuid().ToString()},
+    {param($e);$e.ConfigurationOrigins=@([pscustomobject]@{Reference='/Checks/999'})},
+    {param($e);$e.VpnInterfaceContext=@([pscustomobject]@{RouteReferences=@('/Checks/999')})},
+    {param($e);$e.DhcpSummary.Interfaces=@([pscustomobject]@{Sources=@{Adapters=@{Scope='Current';RunId=$e.RunId;EvidenceReferences=@('/Checks/999');CheckReferences=@('/Checks/0')}}})},
+    {param($e);$e.DhcpSummary.Interfaces=@([pscustomobject]@{Sources=@{Adapters=@{Scope='Current';RunId='wrong';CheckReferences=@('/Checks/0')}}})}
+)
+foreach($mutate in $mutations){$e=$original|ConvertFrom-Json;& $mutate $e;Set-AtomicText $path (ConvertTo-Json $e -Depth 32);$r=Test-DiagnosticArtifact $path;Assert ($r.Status -eq 'Invalid') 'Invalid mutation accepted'}
+$e=$original|ConvertFrom-Json
+$e.Checks[0].Data=@([pscustomobject]@{Reference='/untrusted/provider/value';Path='/not/a/reference';Scope='raw'});
+Set-AtomicText $path (ConvertTo-Json $e -Depth 32)
+Assert ((Test-DiagnosticArtifact $path).Status -eq 'Valid') 'Raw provider strings misinterpreted as references'
+$hash=(Get-FileHash -LiteralPath $path).Hash
+$null=& powershell.exe -NoProfile -File (Join-Path $root 'Verify-NetworkDiagnostics.ps1') -Path $path
+Assert ($LASTEXITCODE -eq 0 -and (Get-FileHash -LiteralPath $path).Hash -eq $hash) 'Bounded verifier exit/read-only behavior'
+$script:time=0
+$obs=Invoke-ObservationRun -RepositoryRoot $root -OutputRoot $work -DurationSeconds 10 -IntervalSeconds 5 -CheckExecutor $execute -ElapsedClock {$script:time} -WaitAction {param($seconds);$script:time+=$seconds}
+$path=Join-Path $obs.Directory 'evidence.json';$original=[IO.File]::ReadAllText($path)
+$r=Test-DiagnosticArtifact $path;Assert ($r.Status -eq 'Valid') ($r.Issues -join '; ')
+foreach($mutate in @(
+    {param($e);$e.Samples[0].Sha256='bad'},
+    {param($e);$e.Samples[1].Changes[0].BeforeEvidence.RunId='wrong'},
+    {param($e);$e.Samples[1].Changes[0].BeforeEvidence.SourceCheck='missing'},
+    {param($e);$e.Samples[1].Changes[0].BeforeEvidence.Scope='Unknown'},
+    {param($e);$e.Samples[1].Changes[0] | Add-Member NoteProperty ChangedFields @([pscustomobject]@{BeforeArtifact='missing.json';BeforePath='/Checks/0';AfterArtifact='sample-0001.json';AfterPath='/Checks/0'}) -Force},
+    {param($e);$e.CompletedAt='bad'}
+)){$e=$original|ConvertFrom-Json;& $mutate $e;Set-AtomicText $path (ConvertTo-Json $e -Depth 32);Assert ((Test-DiagnosticArtifact $path).Status -eq 'Invalid') 'Invalid observation accepted'}
+$e=$original|ConvertFrom-Json;$e.Samples[0].Path='..\outside.json';Set-AtomicText $path (ConvertTo-Json $e -Depth 32)
+$rejected=$false;try{$null=Test-DiagnosticArtifact $path}catch{$rejected=$true};Assert $rejected 'Unsafe sample path accepted'
+$e=$original|ConvertFrom-Json;$e.Samples=@();Set-AtomicText $path (ConvertTo-Json $e -Depth 32)
+Assert ((Test-DiagnosticArtifact $path).Status -eq 'Valid') 'Zero-sample deadline outcome rejected'
+$e.SchemaVersion=9;Set-AtomicText $path (ConvertTo-Json $e -Depth 32)
+Assert ((Test-DiagnosticArtifact $path).Status -eq 'Unsupported') 'Older schema accepted'
+Write-Host 'PASS: producer-shaped offline artifacts, structural/reference/hash separation, invalid mutations, raw-data isolation and bounded read-only command.'

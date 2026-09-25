@@ -1,4 +1,4 @@
-> Current 0.6.0 implementation results and limitations are in [VALIDATION-CURRENT.md](VALIDATION-CURRENT.md).
+> Current working-tree implementation results and limitations are in [VALIDATION-CURRENT.md](VALIDATION-CURRENT.md).
 
 > This is a historical validation record. Statements such as "Windows 11
 > remains untested" and requests to rerun collection describe their historical

@@ -1,7 +1,7 @@
 function Invoke-BoundedCheck {
     param([Parameter(Mandatory)]$Definition, [Parameter(Mandatory)][string]$SourceDirectory,
         [Parameter(Mandatory)][string]$WorkingDirectory, [ValidateRange(1,600)][int]$TimeoutSeconds = 30,
-        [string[]]$AdditionalSources = @())
+        [string[]]$AdditionalSources = @(),[switch]$CapturePartialOutput)
     $start = [DateTimeOffset]::Now
     $watch = [Diagnostics.Stopwatch]::StartNew()
     $worker = $null
@@ -9,6 +9,7 @@ function Invoke-BoundedCheck {
     $scratch = Join-Path $scratchRoot ([guid]::NewGuid().ToString('N'))
     $result = $null
     $workerId = $null
+    $partialOutput=$null
     try {
         if (-not ('NetworkDiagnostics.WorkerProcess' -as [type])) {
             Add-Type -Path (Join-Path $SourceDirectory 'NativeProcess.cs') -ErrorAction Stop
@@ -16,6 +17,7 @@ function Invoke-BoundedCheck {
         $null = [IO.Directory]::CreateDirectory($scratch)
         $inputFile = Join-Path $scratch 'request.clixml'
         $resultFile = Join-Path $scratch 'result.json'
+        if($CapturePartialOutput){$Definition.Arguments.PartialOutputPath=Join-Path $scratch 'partial-output.txt'}
         $sources = @('Core.ps1', 'Events.ps1', 'Collection.ps1', 'Connectivity.ps1') | ForEach-Object { Join-Path $SourceDirectory $_ }
         [pscustomobject]@{ Name = $Definition.Name; FunctionName = $Definition.FunctionName;
             Arguments = $Definition.Arguments; SourcePaths = @($sources) + @($AdditionalSources)
@@ -40,11 +42,14 @@ function Invoke-BoundedCheck {
         $result = Invoke-DiagnosticCheck -Name $Definition.Name -Action { throw $failure }
     } finally {
         if ($null -ne $worker) { $worker.Dispose() }
+        if($CapturePartialOutput -and [IO.File]::Exists((Join-Path $scratch 'partial-output.txt'))){
+            try{$reader=[IO.StreamReader]::new((Join-Path $scratch 'partial-output.txt'));try{$buffer=New-Object char[] 65536;$n=$reader.ReadBlock($buffer,0,$buffer.Length);$partialOutput=[string]::new($buffer,0,$n)}finally{$reader.Dispose()}}catch{$partialOutput='Partial output unavailable: '+$_.Exception.Message}
+        }
         # The entire worker tree has been terminated before its private scratch is removed.
         if ([IO.Path]::GetFullPath($scratch).StartsWith($scratchRoot+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath $scratch)) { Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue }
         $watch.Stop()
     }
     [pscustomobject]@{ Name = $Definition.Name; StartedAt = $start.ToString('o'); CompletedAt = [DateTimeOffset]::Now.ToString('o')
         DurationMs = $watch.ElapsedMilliseconds; DurationBasis='Parent check Stopwatch including startup and cleanup'; TimeoutSeconds = $TimeoutSeconds; WorkerProcessId = $workerId
-        Request = $Definition.Arguments; Status = $result.Status; TimeoutScope = $(if ($result.Status -eq 'TimedOut') { 'Worker' } else { $null }); Data = @($result.Data); Error = $result.Error }
+        Request = $Definition.Arguments; Status = $result.Status; PartialOutput=$partialOutput; TimeoutScope = $(if ($result.Status -eq 'TimedOut') { 'Worker' } else { $null }); Data = @($result.Data); Error = $result.Error }
 }

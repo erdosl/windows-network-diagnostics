@@ -100,11 +100,13 @@ function Get-ConfigurationOrigins {
 function ConvertTo-AdditionalEvidenceHtml {
     param($Evidence)
     $incident=@($Evidence.Checks | Where-Object Name -eq 'IncidentContext')
-    $origins=@(Get-ConfigurationOrigins $Evidence.Checks)
+    $origins=@($Evidence.ConfigurationOrigins)
     $inventory=@($Evidence.Checks | Where-Object Name -in @('Proxy:User','Proxy:Machine','Proxy:WinHTTP','VPN:User','VPN:AllUsers','AdapterBindings'))
-    if(-not $incident.Count -and -not $inventory.Count){return ''}
     $html='<h2>Incident and configuration context</h2><p>User reports are unverified. Installed bindings and VPN/proxy settings do not establish fault.</p>'
-    foreach($section in @(@('User-reported incident',$incident),@('Configuration origins',$origins),@('VPN, proxy and bindings',$inventory),@('PPP/tunnel interface route associations',@(Get-VpnInterfaceContext $Evidence.Checks)))){
+    foreach($analysis in @($Evidence.Analysis.Sections | Where-Object { $_.Section -in @('ConfigurationOrigins','VpnInterfaceContext') -and $_.Status -ne 'Complete' })){
+        $html+='<p>'+[Net.WebUtility]::HtmlEncode($analysis.Section+': '+$analysis.Status+'; '+$analysis.Error.Message)+'</p>'
+    }
+    foreach($section in @(@('User-reported incident',$incident),@('Configuration origins',$origins),@('VPN, proxy and bindings',$inventory),@('PPP/tunnel interface route associations',@($Evidence.VpnInterfaceContext)))){
         $html+='<details><summary>'+[Net.WebUtility]::HtmlEncode($section[0])+'</summary><pre>'+[Net.WebUtility]::HtmlEncode((ConvertTo-Json -InputObject $section[1] -Depth 16))+'</pre></details>'
     }
     $html

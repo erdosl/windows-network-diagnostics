@@ -56,7 +56,7 @@ function Read-DiagnosticEvidence {
 function New-SnapshotIdentity {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     [pscustomobject]@{ ComputerName = [Environment]::MachineName; RunId = [guid]::NewGuid().ToString('D')
-        CollectorVersion = '0.6.0'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        CollectorVersion = '0.7.0'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         StartedAt = [DateTimeOffset]::Now.ToString('o') }
 }
 
@@ -90,7 +90,7 @@ function Get-RunMetadata {
         Runtime=[pscustomobject]@{Version=$PSVersionTable.PSVersion.ToString();Edition='Windows PowerShell';Provenance='Executing PowerShell process'}
         OS=[pscustomobject]@{Version=[Environment]::OSVersion.Version.ToString();Provenance='System.Environment.OSVersion (may be compatibility affected)';WindowsCheckPath=$null;Status='RuntimeReported';Reason='Authoritative Windows provider evidence, when collected, remains in Checks.'}
         BuildRevision=$buildRevision;BuildRevisionStatus=$buildStatus;BuildRevisionReason=$buildReason
-        Contracts=[pscustomobject]@{Schema=10;Publication=1;Analysis=1;Context=4;ObservationComparison=4;Timing=1;LeaseTimestamp=1}}
+        Contracts=[pscustomobject]@{Schema=11;Publication=1;Analysis=1;Context=4;ObservationComparison=5;ObservationFields=1;Timing=1;SampleTiming=2;EventCoverage=1;DnsPolicy=1;LeaseTimestamp=1}}
 }
 
 function Get-InterfaceSummary {

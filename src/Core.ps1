@@ -3,6 +3,8 @@
 . (Join-Path $PSScriptRoot 'Findings.ps1')
 . (Join-Path $PSScriptRoot 'AdditionalEvidence.ps1')
 . (Join-Path $PSScriptRoot 'ReportPipeline.ps1')
+. (Join-Path $PSScriptRoot 'Events.ps1')
+. (Join-Path $PSScriptRoot 'DnsPolicy.ps1')
 
 function Get-AddressClassification {
     param([AllowNull()][AllowEmptyString()][string]$Address)

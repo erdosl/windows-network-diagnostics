@@ -18,20 +18,44 @@ function Test-ProbeTimeoutException {
 }
 
 function Read-ProbeHttpStatus {
-    param($Stream, [Diagnostics.Stopwatch]$Watch, [int]$TimeoutMs)
-    $line = [Text.StringBuilder]::new()
-    while ($line.Length -lt 4096) {
-        $Stream.ReadTimeout = Get-ProbeRemainingMilliseconds $Watch $TimeoutMs 'HTTP response'
-        $next = $Stream.ReadByte()
-        if ($next -eq -1 -or $next -eq 10) { break }
-        if ($next -ne 13) { $null = $line.Append([char]$next) }
+    param($Stream, [Diagnostics.Stopwatch]$Watch, [int]$TimeoutMs,$Evidence)
+    $budget=@{Bytes=0;Informational=0}
+    $readLine={
+        $line=[Text.StringBuilder]::new();$cr=$false
+        while($true){
+            $remaining=Get-ProbeRemainingMilliseconds $Watch $TimeoutMs 'HTTP response headers'
+            if($Stream -isnot [IO.Stream] -or $Stream.CanTimeout){$Stream.ReadTimeout=$remaining}
+            $next=$Stream.ReadByte();$budget.Bytes++
+            if($budget.Bytes -gt 32768){throw [IO.InvalidDataException]::new('HTTP total header limit exceeded (32768 bytes).')}
+            if($next -lt 0){throw [IO.EndOfStreamException]::new('EOF before complete final HTTP headers.')}
+            if($cr){if($next -ne 10){throw [IO.InvalidDataException]::new('HTTP header line requires CRLF.')};return $line.ToString()}
+            if($next -eq 13){$cr=$true;continue}
+            if($next -eq 10 -or ($next -lt 32 -and $next -ne 9) -or $next -eq 127){throw [IO.InvalidDataException]::new('Invalid HTTP header character.')}
+            $null=$line.Append([char]$next)
+            if($line.Length -gt 4096){throw [IO.InvalidDataException]::new('HTTP line limit exceeded (4096 bytes).')}
+        }
     }
-    $line.ToString()
+    while($true){
+        $status=& $readLine
+        if($status -notmatch '^HTTP/1\.[01] ([1-5][0-9]{2}) [\x20-\x7e\x80-\xff]*$'){throw [IO.InvalidDataException]::new('Invalid HTTP status line or status code.')}
+        $code=[int]$Matches[1]
+        if($code -lt 200){
+            $budget.Informational++
+            if($Evidence){$Evidence.InformationalStatuses+= $status}
+            if($code -eq 101){throw [NotSupportedException]::new('HTTP 101 protocol upgrade is unexpected for this HEAD probe.')}
+            if($budget.Informational -gt 8){throw [IO.InvalidDataException]::new('HTTP informational response limit exceeded (8).')}
+        }elseif($Evidence){$Evidence.HttpStatusLine=$status;$Evidence.FinalStatusCode=$code}
+        do {
+            $header=& $readLine
+            if($header -and $header -notmatch '^[!#$%&''*+.^_`|~0-9A-Za-z-]+:[\x09\x20-\x7e\x80-\xff]*$'){throw [IO.InvalidDataException]::new('Malformed HTTP header.')}
+        }while($header.Length -gt 0)
+        if($code -ge 200){return $status}
+    }
 }
 
 function Get-ProbeHttpOutcome {
     param([string]$StatusLine)
-    if ($StatusLine -notmatch '^HTTP/1\.[01] ([0-9]{3})') { throw 'Invalid or missing HTTP response status line.' }
+    if ($StatusLine -notmatch '^HTTP/1\.[01] ([2-5][0-9]{2}) [\x20-\x7e\x80-\xff]*$') { throw 'Invalid or missing final HTTP response status line.' }
     if ([int]$Matches[1] -ge 400) { 'HttpError' } else { 'Success' }
 }
 
@@ -184,7 +208,7 @@ function Invoke-ConnectivityProbe {
                 if ($Kind -eq 'HTTPS') {
                     $uri = [uri]$Endpoint
                     if ($uri.Scheme -ne 'https' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment) { throw 'HTTPS endpoint must have no user information, query, or fragment.' }
-                    $result.Evidence = [pscustomobject]@{ Endpoint = $Endpoint; Method = 'HEAD'; HttpStatusLine = $null; TlsProtocol = $null
+                    $result.Evidence = [pscustomobject]@{ Endpoint = $Endpoint; Method = 'HEAD'; HttpStatusLine = $null; FinalStatusCode=$null;InformationalStatuses=@(); TlsProtocol = $null
                         Proxy = 'Direct connection; system proxies and redirects are not used.' }
                     $stream = $client.GetStream()
                     $stream.ReadTimeout = Get-ProbeRemainingMilliseconds $watch $TimeoutMs 'TLS setup'
@@ -199,7 +223,7 @@ function Invoke-ConnectivityProbe {
                     $bytes = [Text.Encoding]::ASCII.GetBytes($request)
                     $ssl.Write($bytes, 0, $bytes.Length)
                     $result.CompletedStages += 'HTTP request'
-                    $result.Evidence.HttpStatusLine = Read-ProbeHttpStatus $ssl $watch $TimeoutMs
+                    $result.Evidence.HttpStatusLine = Read-ProbeHttpStatus $ssl $watch $TimeoutMs $result.Evidence
                     $result.Outcome = Get-ProbeHttpOutcome $result.Evidence.HttpStatusLine
                     $result.CompletedStages += 'HTTP response'
                 }

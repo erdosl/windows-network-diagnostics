@@ -33,8 +33,27 @@ function Get-RecentNetworkEvents {
     [pscustomobject]@{ LogName = $LogName; StartTime = ([DateTimeOffset]$StartTime).ToString('o')
         EndTime = ([DateTimeOffset]$EndTime).ToString('o'); MaxEvents = $MaxEvents
         LimitReached = ($events.Count -eq $MaxEvents); Providers = $providerEvidence
+        CoverageContractVersion=1;RequestedProviders=@($Providers);AvailableProviders=$(if($Providers.Count){@($supported)}else{@($log.ProviderNames)})
+        ReturnedCount=$events.Count
+        IntervalCoverage=$(if($Providers.Count -gt 0 -and -not $supported.Count){'Unavailable'}elseif($supported.Count -lt $Providers.Count){'Partial'}elseif($events.Count -eq $MaxEvents){'Uncertain'}else{'Complete'})
+        PossibleGap=($events.Count -eq $MaxEvents)
+        CoverageLimitation=$(if($events.Count -eq $MaxEvents){'Event limit reached; this requested interval may contain omitted events. Cursor advancement does not establish complete coverage.'}elseif($supported.Count -lt $Providers.Count){'Requested providers are unavailable; their events were not assessed.'}else{'Coverage applies only to this query and the available log; events outside retained log history cannot be established.'})
         QueryStatus = $(if ($Providers.Count -gt 0 -and $supported.Count -eq 0) { 'Unavailable' } else { 'Success' })
         Events = @($events | ForEach-Object { Convert-NetworkEvent $_ }) }
+}
+
+function Get-EventCoverageSummary {
+    param($Checks)
+    for($i=0;$i -lt @($Checks).Count;$i++){
+        $check=$Checks[$i];if($check.Name -notlike 'Events:*'){continue}
+        if($check.Status -ne 'Success'){
+            [pscustomobject]@{Check=$check.Name;QueryStatus=$check.Status;IntervalCoverage='Unavailable';EvidencePath="/Checks/$i";PossibleGap=$true};continue
+        }
+        for($j=0;$j -lt @($check.Data).Count;$j++){
+            $g=$check.Data[$j]
+            [pscustomobject]@{Check=$check.Name;QueryStatus=$g.QueryStatus;IntervalCoverage=$(if($g.IntervalCoverage){$g.IntervalCoverage}else{'Unknown'});RequestedProviders=@($g.RequestedProviders);AvailableProviders=@($g.AvailableProviders);StartTime=$g.StartTime;EndTime=$g.EndTime;ReturnedCount=$g.ReturnedCount;Limit=$g.MaxEvents;PossibleGap=($g.LimitReached -eq $true);Limitation=$g.CoverageLimitation;EvidencePath="/Checks/$i/Data/$j"}
+        }
+    }
 }
 
 function Get-EventDefinitions {

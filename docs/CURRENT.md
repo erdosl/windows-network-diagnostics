@@ -1,8 +1,8 @@
-# Current reference: collector 0.6.0
+# Current reference: collector 0.7.0
 
-Windows 10/11 and Windows PowerShell 5.1 are the targets. This release has local
-Windows 10 validation with the restrictions in [the current matrix](VALIDATION-CURRENT.md).
-The earlier Windows 11 0.5.4 results are historical, not validation of 0.6.0.
+Windows 10/11 and Windows PowerShell 5.1 are the targets. See local
+Windows 10 validation coverage and restrictions in [the current matrix](VALIDATION-CURRENT.md).
+The earlier Windows 11 0.5.4 results are historical, not validation of 0.7.0.
 
 ## Collection, analysis and publication
 
@@ -18,7 +18,7 @@ configuration changes and counter deltas are separate analysis sections. Samples
 retain interface values, source coverage and structured historical event context;
 the manifest links samples and summarizes changes. Manifest statistics coverage
 uses an explicit Artifact name to scope its EvidencePath to the sample. Failed analysis never means
-unchanged configuration. Timing contract 1 is retained: collection uses the parent
+unchanged configuration. Sample timing contract 2 ends collection before analysis; run timing contract 1 is retained: collection uses the parent
 Stopwatch, counter intervals require same-run monotonic windows, and finalization
 measurement excludes final metadata writes. The initial HTML publication is in
 the measured finalization interval; the final metadata/HTML writes are outside it.
@@ -81,15 +81,15 @@ its existing narrow-filter/session-ownership guarantees can be satisfied.
 
 ## DHCP interpretation and compatibility
 
-Root **schema 10** describes an artifact format, not the number of snapshots.
-Collector **0.6.0**, `ContextEvidence.ContractVersion=4` and
-`ObservationComparisonVersion=4` document the changed lease semantics.
+Root **schema 11** describes an artifact format, not the number of snapshots.
+Collector **0.7.0**, `ContextEvidence.ContractVersion=4` and
+`ObservationComparisonVersion=5` identify unchanged DHCP context semantics and expanded non-DHCP comparisons.
 Analysis, publication, metadata and lease timestamp classification use contract 1.
-Provider, Wi-Fi, timing and VLAN contracts retain their earlier meanings.
+Provider, Wi-Fi, run/counter timing and VLAN contracts retain their earlier meanings; sample timing is now contract 2.
 
-Snapshot baselines in schemas 6–10 are rederived from raw consumed check families;
+Snapshot baselines in schemas 6–11 are rederived from raw consumed check families;
 older derived comparison history is never imported. Older collectors may refuse
-schema 10. Observation DHCP states require contract 4 rather than silently
+schema 11. Observation DHCP states require contract 4 rather than silently
 comparing older derived states. Preserve original artifacts when upgrading.
 
 Valid timestamps compare as instants. Equivalent offsets produce `SameInstant`.
@@ -132,7 +132,7 @@ not certify unmodified local files. Build revision is otherwise explicitly unava
 source tree, no Git dependency is introduced, and ZIP downloads get no invented SHA.
 The test runner records Git HEAD when available and labels possible working edits.
 
-The verifier supports schema 10 only, reports older formats as Unsupported,
+The verifier supports schema 11 only, reports older formats as Unsupported,
 and reads in a bounded Windows PowerShell worker. Limits: 32 MiB per JSON file,
 128 MiB total, 121 samples, reference traversal depth 48. Only expected sequential
 sample basenames in the artifact directory are allowed; remote paths, traversal,
@@ -161,3 +161,60 @@ Historical implementation and validation notes remain in
 [EVIDENCE-EXTENSIONS.md](EVIDENCE-EXTENSIONS.md), [VALIDATION.md](VALIDATION.md) and
 [WINDOWS11-FINDINGS.md](WINDOWS11-FINDINGS.md). Their version-specific statements,
 including historical commit status, do not describe this working tree.
+
+## Effective DNS policy (separate passive enhancement)
+
+Snapshot checks `DNS:EffectivePolicy` and `DNS:GlobalSettings` run independently in
+bounded workers. They collect local `Get-DnsClientNrptPolicy -Effective` namespaces,
+name servers, DirectAccess and DNSSEC/query settings, and
+`Get-DnsClientGlobalSetting` suffix search list, devolution enablement and level.
+Selected settings retain missing-field metadata and explicit cmdlet provenance.
+Successful empty policy is `ObservedEmpty`; unsupported, denied, failed and timed-out
+checks remain distinct. No observation sampling, network query, PAC retrieval,
+remote session or setting change is performed. Policy does not establish the
+resolver actually used by a particular application.
+
+Field selection follows Microsoft's [NRPT cmdlet reference](https://learn.microsoft.com/en-us/powershell/module/dnsclient/get-dnsclientnrptpolicy)
+and [global settings reference](https://learn.microsoft.com/en-us/powershell/module/dnsclient/get-dnsclientglobalsetting),
+and was checked against installed Windows 10 CDXML definitions without executing
+native policy queries. DNS policy/settings payload contract is 1.
+
+## Current comparison, event and verification details
+
+Observation comparison 5 adds field-comparison contract 1: IP address/prefix/state,
+DNS lists (order retained), route destination/next hop/metrics and adapter link
+state. GUIDs associate adapters; indices only select records within each sample.
+Order-insensitive record collections and equivalent IP spellings do not create
+changes. Missing fields, duplicate identities and incomplete sources retain
+uncertainty; absent records become removals only with sufficient complete evidence.
+Changes include before/after sample pointers and the interval between sample starts.
+No continuity or event causation is inferred.
+
+Event coverage contract 1 distinguishes query execution, provider availability,
+requested interval, returned count and limit. Limit equality is a possible gap,
+not proven truncation. The cursor advances without replaying the interval; the
+original interval and coverage limitation remain in sample and manifest summaries.
+
+HTTPS probes consume at most eight informational responses before a final 200–599
+response. HTTP 101 is unsupported. One timeout spans TCP/TLS/HTTP; header parsing
+is bounded to 32768 bytes total and 4096 bytes per line. Truncation or malformed
+headers fail the probe while completed stages and received statuses remain in
+its evidence. There is no redirect following, authentication or body download.
+
+Verification uses schema-aware reference-bearing sections, excluding raw provider
+payloads. `Structure`, `References`, `SampleHashes`, `CollectionStatus` and
+`AnalysisCoverage` are separate. Complete collection with partial analysis can
+verify successfully; incomplete collection returns `Incomplete` if the other
+checks pass. A valid zero-sample completed observation is allowed because the
+startup/deadline budget can prevent an attempted sample. Root/sample completion
+metadata and embedded identities must agree. Schema 10 and older artifacts are
+explicitly Unsupported by this verifier; baseline reading still supports 6–11.
+
+The validation runner writes an initial Incomplete record and immutable numbered
+atomic checkpoints before/after suites. Earlier checkpoints are never replaced.
+`results.json` is the final record for normal completion or a caught interruption;
+a killed parent may leave only checkpoints. Choose the highest complete numbered
+JSON file and inspect its Status and PendingSuite. Worker scratch retains up to
+65536 output characters; the parent publishes the log after worker cleanup,
+including on timeout. Missing exit code is null, never an inferred success/failure
+code. Catalog validation rejects uncategorized Test-*.ps1 files.

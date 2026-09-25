@@ -32,7 +32,7 @@ function Invoke-SnapshotRun {
     $computer = $identity.ComputerName -replace '[^A-Za-z0-9_.-]', '_'
     if($TestOutputRoot){$OutputRoot=$TestOutputRoot}
     $directory=New-DiagnosticRunDirectory $RepositoryRoot $OutputRoot 'Snapshot' $identity
-    $evidence = [pscustomobject]@{ SchemaVersion = 10; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
+    $evidence = [pscustomobject]@{ SchemaVersion = 11; Mode = 'Snapshot'; ComputerName = $identity.ComputerName
         RunId = $identity.RunId; CollectorVersion = $identity.CollectorVersion; IsElevated = $identity.IsElevated
         StartedAt = $identity.StartedAt; CollectedAt = $identity.StartedAt; CompletedAt = $null
         CollectionStatus = 'Incomplete'; PendingCheck = $null; Revision = 0; PlannedChecks = @()
@@ -111,6 +111,8 @@ function Invoke-SnapshotRun {
         & $execute ([pscustomobject]@{Name='Proxy:WinHTTP';FunctionName='Get-WinHttpProxyInventory';Arguments=@{}})
         foreach($scope in @('User','AllUsers')){ & $execute ([pscustomobject]@{Name="VPN:$scope";FunctionName='Get-VpnInventory';Arguments=@{AllUsers=($scope -eq 'AllUsers')}}) }
         & $execute ([pscustomobject]@{Name='AdapterBindings';FunctionName='Get-BindingInventory';Arguments=@{}})
+        & $execute ([pscustomobject]@{Name='DNS:EffectivePolicy';FunctionName='Get-EffectiveDnsPolicy';Arguments=@{}})
+        & $execute ([pscustomobject]@{Name='DNS:GlobalSettings';FunctionName='Get-GlobalDnsSettings';Arguments=@{}})
         foreach ($kind in @('AdapterStatistics','AdapterPowerManagement')) {
             if (-not $adapterInventory.Count) {
                 $evidence.Checks += [pscustomobject]@{Name=$kind;Status='Unavailable';Data=@();Error=[pscustomobject]@{Message='Adapter inventory unavailable or empty; no adapter detail checks scheduled.'}}

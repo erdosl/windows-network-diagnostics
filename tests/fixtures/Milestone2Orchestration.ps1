@@ -37,6 +37,7 @@ function Assert-Milestone2Continuation {
     $expected=@('Windows','TimeZone','Adapters','NICDrivers','IPAddresses','DHCPAndGateways','DNSServers',
         'InterfacesAndMetrics','Routes','Neighbours','WiFiConnection','NICServices',
         'Proxy:User','Proxy:Machine','Proxy:WinHTTP','VPN:User','VPN:AllUsers','AdapterBindings',
+        'DNS:EffectivePolicy','DNS:GlobalSettings',
         'AdapterStatistics:7','AdapterPowerManagement:7',
         'Events:System:Network','Events:System:NIC','Events:System:Power',
         'Events:Microsoft-Windows-Dhcp-Client/Admin','Events:Microsoft-Windows-Dhcp-Client/Operational',

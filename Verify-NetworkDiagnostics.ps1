@@ -2,7 +2,7 @@
 
 <#
 .SYNOPSIS
-Verify the tool's schema-10 artifacts offline without rewriting them.
+Verify the tool's schema-11 artifacts offline without rewriting them.
 .DESCRIPTION
 Uses a bounded worker (30 seconds default), at most 32 MiB per file and 128 MiB
 total, and validates only safe sample basenames. Hashes establish integrity,

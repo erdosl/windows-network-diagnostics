@@ -93,6 +93,8 @@ function ConvertTo-RunOverviewHtml {
     foreach($group in @($Evidence.Checks | Where-Object Status -ne 'Success' | Group-Object { $_.Status+' / '+$(if($_.Error.Id){$_.Error.Id}elseif($_.Error.Explanation){$_.Error.Explanation}else{'See raw source reason'}) })){$html+='<li>'+(& $encode $group.Name)+': '+$group.Count+' ('+(& $encode ($group.Group.Name -join ', '))+')</li>'}
     foreach($section in @($Evidence.Analysis.Sections | Where-Object Status -eq 'Failed')){$html+='<li>Analysis unavailable: '+(& $encode $section.Section)+'; '+(& $encode $section.Error.Message)+'</li>'}
     $html+='</ul><h3>Expectations mismatches (supplied policy)</h3><pre>'+(& $encode (ConvertTo-Json -InputObject @($Evidence.ExpectationAssessment.Results | Where-Object Outcome -eq 'Mismatch') -Depth 10))+'</pre>'
+    $html+='<h3>Event query coverage</h3><pre>'+(& $encode (ConvertTo-Json -InputObject @(Get-EventCoverageSummary $Evidence.Checks) -Depth 8))+'</pre>'
+    $html+=ConvertTo-DnsPolicyHtml $Evidence
     $html+='<h3>Interface and route context</h3><p>Default routes are predictions, not observed socket endpoints. Disconnected interfaces remain visible.</p>'
     foreach($i in @($Evidence.DhcpSummary.Interfaces | Where-Object {$null -ne $_})){
         $reference=[pscustomobject]@{Path=('/DhcpSummary/Interfaces/'+[array]::IndexOf(@($Evidence.DhcpSummary.Interfaces),$i))}
@@ -119,10 +121,11 @@ function Invoke-ObservationAnalysis {
                 DhcpContext {Update-DhcpContext $Sample}
                 Changes {
                     $Sample.Changes=@()
-                    if($Previous){$Sample.Changes=@(Compare-ObservationState (Get-ObservationState $Previous.Checks) (Get-ObservationState $Sample.Checks) $BeforeArtifact $AfterArtifact)}
+                    if($Previous){$Sample.Changes=@(Compare-ObservationState (Get-ObservationState $Previous.Checks $Previous.CollectionStatus) (Get-ObservationState $Sample.Checks $Sample.CollectionStatus) $BeforeArtifact $AfterArtifact)}
                     foreach($change in $Sample.Changes){
-                        $change | Add-Member NoteProperty BeforeEvidence ([pscustomobject]@{Scope='Observation';RunId=$Sample.RunId;Artifact=$BeforeArtifact;SourceCheck=$change.Source}) -Force
-                        $change | Add-Member NoteProperty AfterEvidence ([pscustomobject]@{Scope='Observation';RunId=$Sample.RunId;Artifact=$AfterArtifact;SourceCheck=$change.Source}) -Force
+                        $change | Add-Member NoteProperty Interval ([pscustomobject]@{BeforeStartedAt=$Previous.StartedAt;AfterStartedAt=$Sample.StartedAt;ElapsedSeconds=$Sample.ActualIntervalSeconds;Limitation='Changes occurred somewhere between samples; nearby events are temporal context, not cause.'}) -Force
+                        $change | Add-Member NoteProperty BeforeEvidence ([pscustomobject]@{Scope='Observation';RunId=$Sample.RunId;Artifact=$BeforeArtifact;SourceCheck=$(if(@($Previous.Checks | Where-Object Name -eq $change.Source).Count){$change.Source}else{$null});SourceAvailability=$(if(@($Previous.Checks | Where-Object Name -eq $change.Source).Count){'Present'}else{'Missing'})}) -Force
+                        $change | Add-Member NoteProperty AfterEvidence ([pscustomobject]@{Scope='Observation';RunId=$Sample.RunId;Artifact=$AfterArtifact;SourceCheck=$(if(@($Sample.Checks | Where-Object Name -eq $change.Source).Count){$change.Source}else{$null});SourceAvailability=$(if(@($Sample.Checks | Where-Object Name -eq $change.Source).Count){'Present'}else{'Missing'})}) -Force
                     }
                 }
                 CounterDeltas {$Sample.CounterDeltas=@();if($Previous){$Sample.CounterDeltas=@(Get-CounterDeltas $Previous $Sample $Sample.ActualIntervalSeconds)}}

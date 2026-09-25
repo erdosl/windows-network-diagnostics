@@ -4,7 +4,7 @@ $root=Split-Path $PSScriptRoot -Parent
 foreach($file in @('Core','State','Events','Connectivity','Orchestration','Observation')){. (Join-Path $root "src\$file.ps1")}
 . (Join-Path $PSScriptRoot 'TestWorkRoot.ps1')
 $work=New-TestWorkRoot;$script:files=@{};$script:analysisCount=0;$script:htmlCount=0;$count=0
-function New-SnapshotIdentity {[pscustomobject]@{ComputerName='SYNTHETIC';RunId=[guid]::NewGuid().ToString();CollectorVersion='0.6.0';IsElevated=$false;StartedAt='2026-01-01T00:00:00Z'}}
+function New-SnapshotIdentity {[pscustomobject]@{ComputerName='SYNTHETIC';RunId=[guid]::NewGuid().ToString();CollectorVersion='0.7.0';IsElevated=$false;StartedAt='2026-01-01T00:00:00Z'}}
 function Assert($value,$message){if(-not $value){throw $message};$script:count++}
 function Set-AtomicText {param($Path,$Text);$script:files[$Path]=$Text}
 $script:realLogical=${function:Get-LogicalNetworkModel}

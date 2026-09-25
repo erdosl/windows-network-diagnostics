@@ -1,9 +1,6 @@
 # Current contracts and historical changes
 
-Collector 0.6.0 uses schema 10, context/observation comparison contract 4 and
-analysis/publication/metadata contract 1. See [CURRENT.md](CURRENT.md) for current
-semantics. The versioned sections below are historical; counter timing uses
-the 0.5.3 monotonic contract, not the older wall-clock description.
+See [CURRENT.md](CURRENT.md) for collector 0.7.0 / schema 11 and [draft release notes](RELEASE-NOTES-070.md). The versioned sections below preserve historical behavior.
 
 # Persistence portability in 0.5.4
 

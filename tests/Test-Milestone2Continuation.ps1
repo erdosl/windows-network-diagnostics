@@ -41,4 +41,4 @@ foreach($mutation in @('Duplicate','Reordered','TimeoutLost','ErrorLost','Incomp
     $rejected=$false;try{Assert-Milestone2Continuation $run.Evidence $executed $broken}catch{$rejected=$true}
     Assert-Condition $rejected "$mutation rejected"
 }
-Write-Host 'PASS: complete 28-record orchestration and serialized timeout/completion verified; 37 negative controls rejected. Modeled persistence, no probes.'
+Write-Host 'PASS: named passive-check sequence and serialized timeout/completion verified; missing, duplicate and reordered records rejected. Modeled persistence, no probes.'
