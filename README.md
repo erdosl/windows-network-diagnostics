@@ -6,7 +6,7 @@ separate bounded observation, explicit interface probes, and offline DHCP/ARP
 analysis. Native capture currently returns an explicit capability refusal;
 it does not start a session. Ordinary snapshots remain passive by default.
 
-Collector `0.5.3` (schema 9) collects bounded Windows 10/11 network snapshots for
+Collector `0.5.4` (schema 9) collects bounded Windows 10/11 network snapshots for
 intermittent DHCP, duplicate-IP, DNS, gateway, Ethernet, and Wi-Fi investigations.
 It uses Windows PowerShell 5.1, built-in Windows commands, and .NET only.
 
@@ -644,6 +644,16 @@ references preserve provenance for an empty enumeration with no data-row referen
 Raw checks remain unchanged. Schema-6/7/8 baselines are re-derived from raw checks
 using the same rules, not their older availability labels. Schema 8 explicitly
 versions this semantic change; collector 0.4.0 cannot read a schema-8 baseline.
+
+### Windows 11 follow-up in 0.5.4
+
+Atomic temporary names are shorter while preserving replacement and backups.
+The two path-sensitive orchestration tests place synthetic artifacts in unique
+`%TEMP%/output/tests/` directories, independently of checkout length. Production
+output remains under the checkout's `output/`; use a shorter checkout if its
+runtime rejects long paths. Detailed findings, unresolved provider behavior and
+targeted Windows 11 follow-ups are in [WINDOWS11-FINDINGS.md](docs/WINDOWS11-FINDINGS.md).
+Schema 9 and existing scoped contracts are unchanged.
 
 ### Windows 11 evidence corrections in 0.5.3
 

@@ -1,3 +1,12 @@
+# Persistence portability in 0.5.4
+
+Atomic temporary filenames use a full GUID basename beside the destination,
+preserving exclusive creation, atomic replacement and recovery backups. Path
+errors retain their native InnerException with a shorter-path explanation where
+appropriate. Test working roots are independent of checkout length. No serialized
+snapshot or comparison meaning changes: schema 9 and all existing scoped contracts
+remain unchanged. See [the follow-up](WINDOWS11-FINDINGS.md).
+
 # Windows 11 corrections in 0.5.3
 
 See [Windows 11 findings and validation](WINDOWS11-FINDINGS.md). Root schema 9,

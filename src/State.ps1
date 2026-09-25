@@ -1,7 +1,16 @@
 function Set-AtomicText {
     param([string]$Path, [string]$Text)
-    $temporary = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    $temporary = $null
+    $parent = $null
     try {
+        $Path = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($Path)
+        # GetDirectoryName on some .NET Framework builds rejects long paths
+        # that File.Open/Move support. The provider already resolved this path;
+        # retain its directory verbatim, including a drive/UNC root separator.
+        $parent = $Path.Substring(0, $Path.LastIndexOfAny([char[]]'\/') + 1)
+        # Same directory/volume, full random identity and exclusive creation,
+        # without repeating the report basename in the temporary filename.
+        $temporary = [IO.Path]::Combine($parent, ([guid]::NewGuid().ToString('N') + '.tmp'))
         $bytes = [Text.UTF8Encoding]::new($false).GetBytes($Text)
         $stream = [IO.File]::Open($temporary, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write, [IO.FileShare]::None)
         try { $stream.Write($bytes, 0, $bytes.Length); $stream.Flush($true) } finally { $stream.Dispose() }
@@ -17,6 +26,16 @@ function Set-AtomicText {
                 Start-Sleep -Milliseconds 200
             }
         }
+    } catch {
+        $native = $_.Exception.GetBaseException()
+        if ($native -is [IO.PathTooLongException]) {
+            throw [IO.PathTooLongException]::new('Atomic report path is too long for this runtime. Use a shorter checkout/output path, allowing room for temporary and .bak filenames. The native failure is retained as InnerException.', $native)
+        }
+        if ($native -is [IO.DirectoryNotFoundException] -and [IO.Directory]::Exists($parent) -and
+            ($temporary.Length -ge 260 -or ($Path.Length + 4) -ge 260)) {
+            throw [IO.DirectoryNotFoundException]::new('Atomic report directory could not be resolved although its parent was observed present. This long path may exceed runtime limits; try a shorter checkout/output path. A concurrent directory change is also possible. The native failure is retained as InnerException.', $native)
+        }
+        throw
     } finally {
         if ([IO.File]::Exists($temporary)) { [IO.File]::Delete($temporary) }
     }
@@ -37,7 +56,7 @@ function Read-DiagnosticEvidence {
 function New-SnapshotIdentity {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     [pscustomobject]@{ ComputerName = [Environment]::MachineName; RunId = [guid]::NewGuid().ToString('D')
-        CollectorVersion = '0.5.3'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        CollectorVersion = '0.5.4'; IsElevated = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
         StartedAt = [DateTimeOffset]::Now.ToString('o') }
 }
 

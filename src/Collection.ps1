@@ -11,6 +11,8 @@ function Invoke-SnapshotCollector {
         [pscustomobject]@{ Id = $zone.Id; DisplayName = $zone.DisplayName; UtcOffset = $now.Offset.ToString(); Timestamp = $now.ToString('o') }
         }
         'Adapters' {
+        # Unfiltered inventory: do not route this through literal-name detail
+        # selection, filter by state, or collapse similar installation identities.
         Get-NetAdapter -IncludeHidden -ErrorAction Stop | Select-Object Name, InterfaceDescription, InterfaceIndex, InterfaceGuid,
             MacAddress, Status, LinkSpeed, InterfaceType, HardwareInterface, MediaType, PhysicalMediaType,
             DriverInformation, DriverFileName, DriverVersion, DriverDate, PnPDeviceID
@@ -172,6 +174,9 @@ function Invoke-ObservationStatistics {
     param([object[]]$Adapters,$TimingContext)
     $collectedAt=[DateTimeOffset]::Now.ToString('o')
     $queryTicks=[Diagnostics.Stopwatch]::GetTimestamp()
+    # '*' is intentionally the entire batch, never an escaped literal target.
+    # Stop also promotes nonterminating provider errors; empty success must not
+    # represent a suppressed native error.
     try{$inventory=@(Get-NetAdapterStatistics -Name '*' -IncludeHidden -ErrorAction Stop)}
     catch{
         $_.Exception.Data['AdapterProviderContext']='AdapterStatistics'

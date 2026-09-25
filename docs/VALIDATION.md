@@ -1504,3 +1504,108 @@ and entry-loading suites passed. Real observation, DHCP orchestration and milest
 persistence suites, plus both passive entry runs, were blocked by File.Replace
 access denied in the restricted development context. Persistence was not weakened.
 Private evidence/extractions remain ignored; no commit or push was made.
+# Windows 11 follow-up, 2026-09-25, collector 0.5.4
+
+Development executions: Windows 10 **10.0.19045.0**, Windows PowerShell
+**5.1.19041.7725**, non-elevated. In powershell.exe, CurrentUser execution policy
+was RemoteSigned and all other scopes Undefined. The tool's outer shell is
+PowerShell 7; it was not used as a substitute for the actual 5.1 test executions.
+No execution-policy override, live connectivity probe, packet capture, DHCP
+renew/release, adapter reset, service/driver change or log enablement was used.
+
+Every suite command was `powershell.exe -NoProfile -File tests/<Suite>.ps1`
+from the repository root. This table records this edited tree, separately from
+the supplied Windows 11 results below. Logs for the regression groups are ignored
+under `output/tests/validation-054/`.
+
+| Suite | Exit | Result |
+| --- | --- | --- |
+| Test-InventoryBoundaries | 0 | 40; anonymized providers, real worker/JSON serialization, full/unmatched DHCP inventory, literal targeting, empty/failed/nonterminating/unmatched/matched statistics |
+| Test-Windows11Evidence | 0 | 57; synthetic provider/Wi-Fi/timing regressions |
+| Test-Windows11Worker | 0 | 5; real worker/shared clock, synthetic provider, actual incomplete recovery reads |
+| Test-AdapterApipa | 0 | 26 |
+| Test-Observation | 0 | 13 |
+| Test-ObservationDhcp | 0 | 17 |
+| Test-ObservationSerialization | 0 | 25 |
+| Test-ObservationModel | 0 | 7; modeled persistence |
+| Test-LiveObservation | 0 | 29; synthetic collectors/modeled persistence despite suite name |
+| Test-Snapshot | 0 | 42 |
+| Test-Presentation | 0 | 33 |
+| Test-AdditionalEvidence | 0 | 15 |
+| Test-AdditionalOrchestrationModel | 0 | 8; modeled persistence |
+| Test-DhcpContext | 0 | 52 |
+| Test-DhcpReview | 0 | 41 |
+| Test-SnapshotComparison | 0 | 54 |
+| Test-EventCorrelation | 0 | 27 |
+| Test-CaptureVlan | 0 | 16; synthetic data only |
+| Test-EntryLoading | 0 | 8; actual entry help/dot-sourcing from another working directory and path with spaces |
+| Test-Milestone2Continuation | 0 | Complete 28-record modeled orchestration/serialization; 37 negative controls rejected |
+| Test-ObservationRun | 1 | File.Replace access denied; real atomic orchestration incomplete |
+| Test-DhcpOrchestration | 1 | File.Replace access denied; real atomic orchestration incomplete |
+| Test-Milestone2 | 1 | Real timeout/descendant cleanup and subsequent worker assertions reached; stopped in orchestration at File.Replace denial |
+| Test-CaptureImport | 1 | Synthetic offline import stopped at File.Replace denial; no live capture |
+| Test-PathPortability | 1 | Four assertions reached: missing short directory, unsupported filename with explanatory error, old 261-character temp experiment, successful new first publication; replacement denied, backup/cleanup assertions not reached |
+| Test-LongCheckout | 1 | Copies only source/tests to a 171-character checkout with spaces; both child suites load and reach File.Replace denial; neither failed at temporary creation |
+
+Twenty suites passed. The failing persistence suites are not counted as passes,
+and modeled persistence does not replace atomic-write validation. No permission
+escalation or weakened persistence was attempted. This environment accepted the
+old 261-character temporary filename, so the specific Windows 11
+DirectoryNotFoundException/long-path mechanism remains unreproduced. Supported
+long paths are not rejected solely on character count. The regression tests are
+retained for execution in a normal Windows 11 terminal; they are not skipped
+because the sandbox blocks replacement.
+
+Exact additional commands:
+
+```powershell
+powershell.exe -NoProfile -File Collect-NetworkDiagnostics.ps1 -LookbackHours 1 -MaxEventsPerLog 10 -MaxNicEvents 8 -MaxPowerEvents 5 -CheckTimeoutSeconds 10
+powershell.exe -NoProfile -File Watch-NetworkDiagnostics.ps1 -DurationSeconds 10 -IntervalSeconds 5 -CheckTimeoutSeconds 3
+powershell.exe -NoProfile -Command '$PSVersionTable.PSVersion.ToString(); [Environment]::OSVersion.Version.ToString(); Get-ExecutionPolicy -List; ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
+git diff --check
+git check-ignore windows-11-files/adapters.txt output/tests/validation-054
+git ls-files windows-11-files
+```
+
+Both passive entry runs exited **1**, at File.Replace access denial. Neither is
+a successful end-to-end collection. Environment inspection exited 0 with the
+values above. Git diff whitespace check passed; private evidence/output are
+ignored, and no files in windows-11-files are tracked. All `.ps1` files in source
+and tests were parsed by Windows PowerShell 5.1; the new follow-up inspector and
+its function-only source were included. The inspector's live Windows 11 provider
+operations were not executed on Windows 10 as a proxy for Windows 11 behavior.
+
+## Supplied Windows 11 results (0.5.3, before these edits)
+
+User-reported Windows 11 Enterprise Evaluation build 26200, Windows PowerShell
+5.1.26100.9444. Ten selected suites total **208 assertions**, each exit **0**:
+
+| Suite | Assertions |
+| --- | --- |
+| Windows11Evidence | 57 |
+| Windows11Worker | 5 |
+| AdapterApipa | 26 |
+| ObservationRun | 5 |
+| DhcpOrchestration | 8 |
+| Milestone2 | 63 |
+| ObservationDhcp | 17 |
+| CaptureVlan | 16 |
+| CaptureImport | 3 |
+| EntryLoading | 8 |
+
+ObservationRun and DhcpOrchestration first failed at temporary-file creation with
+DirectoryNotFoundException in the nested downloaded checkout, then passed unchanged
+from the shorter checkout. These results strongly support path sensitivity without
+isolating the underlying runtime exception. Many suites use synthetic providers
+or mocked collectors: these are not ten live-provider validations. Snapshot and
+observation also reportedly exited 0; the supplied archives independently confirm
+complete manifests, eight valid sample hashes, seven complete/one useful partial
+sample and the timing values documented in [WINDOWS11-FINDINGS.md](WINDOWS11-FINDINGS.md).
+
+Live Windows 11 verification of 0.5.4 remains pending. The findings document lists
+only the targeted remaining commands and explains what each distinguishes.
+The investigation initially left changes uncommitted and unpushed; the user then
+requested review, commit and push. Review added an immediate completed-inventory
+checkpoint in the inspector and strengthened the missing-short-directory test to
+reject the actual long-path diagnostic text. The existing Windows 11 limitations
+and sandbox persistence failures remain applicable.

@@ -5,8 +5,8 @@ foreach($file in @('Core.ps1','State.ps1','Execution.ps1','Events.ps1','Collecti
 $script:count=0
 function Assert-Run {param($Condition,$Message);if(-not $Condition){throw $Message};$script:count++}
 function New-SnapshotIdentity { [pscustomobject]@{ComputerName='SYNTHETIC';RunId=[guid]::NewGuid().ToString();CollectorVersion='0.5.0';IsElevated=$false;StartedAt='2026-01-01T10:00:00+00:00'} }
-$workspace=Join-Path $root ('output\tests\dhcp-orchestration-'+[guid]::NewGuid().ToString('N'))
-$null=New-Item -ItemType Directory $workspace
+. (Join-Path $PSScriptRoot 'TestWorkRoot.ps1')
+$workspace=New-TestWorkRoot
 $badPath=Join-Path $workspace 'bad input.json'
 '{' | Set-Content $badPath
 $script:checkpointCount=0

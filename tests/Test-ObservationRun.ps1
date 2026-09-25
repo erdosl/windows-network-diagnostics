@@ -2,7 +2,8 @@
 $ErrorActionPreference='Stop'
 $root=Split-Path $PSScriptRoot -Parent
 foreach($file in @('Core','State','Events','Observation')){. (Join-Path $root "src\$file.ps1")}
-$work=Join-Path $root ('output\tests\observation-'+[guid]::NewGuid().ToString('N'))
+. (Join-Path $PSScriptRoot 'TestWorkRoot.ps1')
+$work=New-TestWorkRoot
 function New-SnapshotIdentity {[pscustomobject]@{ComputerName='SYNTHETIC';RunId=[guid]::NewGuid().ToString();CollectorVersion='0.5.0';IsElevated=$false;StartedAt=[DateTimeOffset]::Now.ToString('o')}}
 $script:calls=0;$script:busy=$false
 $mock={param($definition,$timeout,$directory)
